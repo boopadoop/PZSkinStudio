@@ -10,10 +10,11 @@ const PALETTE = [
   '#8d5a3b', '#5a3a26', '#f2e2c4', '#d6b370', '#a67c3d', '#6e4f2a', '#3d2c1c', '#241a12', '#7a1f1f', '#1f3a5f',
   '#e63b2e', '#f28c28', '#f7d038', '#4caf50', '#2ecc71', '#7fdbff', '#2f80ed', '#8e44ad', '#ff8fab', '#c0c0ff',
 ];
-const MODES = ['paint', 'erase', 'pick', 'move'];
+const MODES = ['paint', 'erase', 'fill', 'smudge', 'pick', 'move'];
 const PANELS = ['paintColours', 'paintBox', 'paintSide'];
 const RECENT_COLOURS = 10;
 const MAX_BRUSH = 64;
+const MAX_TOLERANCE = 128;
 const START_COLOUR = '#c68a5c';
 
 const toHex = (rgb) => `#${rgb.map((value) => value.toString(16).padStart(2, '0')).join('')}`;
@@ -31,7 +32,10 @@ export class Painter {
     this.previewDue = false;
     this.view = new PaintView($('paintCanvas'), {
       onStrokeChange: () => this.showChanges(),
-      onStrokeEnd: () => { this.remember(this.view.tool.colour); this.updateButtons(); },
+      onStrokeEnd: () => {
+        if (['paint', 'fill'].includes(this.view.tool.mode)) this.remember(this.view.tool.colour);
+        this.updateButtons();
+      },
       onPick: (rgb) => { this.setColour(toHex(rgb)); this.remember(rgb); },
       onHover: () => this.updateStatus(),
     });
@@ -60,9 +64,9 @@ export class Painter {
   bindControls() {
     for (const mode of MODES) $(`tool-${mode}`).onclick = () => this.setMode(mode);
     for (const brush of ['square', 'round', 'soft']) $(`brush-${brush}`).onclick = () => this.setBrush(brush);
-    $('brushSize').oninput = (event) => this.setSize(Number(event.target.value));
-    $('brushSmaller').onclick = () => this.setSize(this.view.tool.size - 1);
-    $('brushBigger').onclick = () => this.setSize(this.view.tool.size + 1);
+    $('brushSize').oninput = (event) => this.setAmount(Number(event.target.value));
+    $('brushSmaller').onclick = () => this.nudgeAmount(-1);
+    $('brushBigger').onclick = () => this.nudgeAmount(1);
     $('paintColour').oninput = (event) => this.setColour(event.target.value);
     $('paintUndo').onclick = () => this.undo();
     $('paintRedo').onclick = () => this.redo();
@@ -83,8 +87,37 @@ export class Painter {
   setMode(mode) {
     this.view.tool.mode = mode;
     for (const name of MODES) $(`tool-${name}`).classList.toggle('active', name === mode);
+    this.showAmount();
     this.view.updateCursor();
     this.view.requestDraw();
+  }
+
+  // The one slider is the brush size, except for Fill, which has no brush and needs a tolerance.
+  get fillSelected() {
+    return this.view.tool.mode === 'fill';
+  }
+
+  showAmount() {
+    const { tool } = this.view;
+    const fill = this.fillSelected;
+    $('sizeLabel').textContent = fill ? 'Tolerance' : 'Size';
+    $('brushSize').min = fill ? 0 : 1;
+    $('brushSize').max = fill ? MAX_TOLERANCE : MAX_BRUSH;
+    $('brushSize').value = fill ? tool.tolerance : tool.size;
+    $('brushSize').setAttribute('aria-label', fill ? 'Fill tolerance' : 'Brush size');
+    $('brushSizeValue').textContent = fill ? tool.tolerance : tool.size;
+    $('sizeRow').title = fill ? 'How different a colour can be and still get filled' : 'Brush size in texture pixels';
+  }
+
+  setAmount(value) {
+    if (this.fillSelected) this.view.tool.tolerance = Math.min(Math.max(value, 0), MAX_TOLERANCE);
+    else this.setSize(value);
+    this.showAmount();
+  }
+
+  nudgeAmount(step) {
+    const { tool } = this.view;
+    this.setAmount((this.fillSelected ? tool.tolerance : tool.size) + step);
   }
 
   toggleMirror(axis) {
@@ -113,10 +146,8 @@ export class Painter {
   }
 
   setSize(size) {
-    const clamped = Math.min(Math.max(size, 1), MAX_BRUSH);
-    this.view.tool.size = clamped;
-    $('brushSize').value = clamped;
-    $('brushSizeValue').textContent = clamped;
+    this.view.tool.size = Math.min(Math.max(size, 1), MAX_BRUSH);
+    this.showAmount();
     this.view.requestDraw();
   }
 
@@ -124,8 +155,8 @@ export class Painter {
     this.view.tool.colour = toRgb(hex);
     $('paintColour').value = hex;
     $('paintHex').textContent = hex;
-    // Picking up a colour means you want to use it next.
-    if (this.view.tool.mode !== 'paint') this.setMode('paint');
+    // Picking up a colour means you want to use it next, by painting unless you're filling.
+    if (!['paint', 'fill'].includes(this.view.tool.mode)) this.setMode('paint');
   }
 
   remember(rgb) {
@@ -250,12 +281,14 @@ export class Painter {
       const actions = {
         b: () => this.setMode('paint'),
         e: () => this.setMode('erase'),
+        k: () => this.setMode('fill'),
+        s: () => this.setMode('smudge'),
         i: () => this.setMode('pick'),
         m: () => this.setMode('move'),
         x: () => this.toggleMirror('mirrorX'),
         y: () => this.toggleMirror('mirrorY'),
-        '[': () => this.setSize(this.view.tool.size - 1),
-        ']': () => this.setSize(this.view.tool.size + 1),
+        '[': () => this.nudgeAmount(-1),
+        ']': () => this.nudgeAmount(1),
         g: () => $('paintGrid').click(),
         u: () => $('paintUv').click(),
         '-': () => this.view.zoomBy(-1),

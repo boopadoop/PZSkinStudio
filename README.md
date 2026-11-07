@@ -64,8 +64,12 @@ Pick a model and skin, then click **Paint**. The texture opens in the middle, th
 are on the left, and the model moves to the right, updating as you paint. Drag it to turn it, right-drag to move it and scroll to zoom, and
 **Enlarge preview** makes it bigger.
 
-- **Tools:** Paint, Erase, Pick colour, and Move for dragging the texture around. Erasing makes the
-  texture transparent.
+- **Tools:** Paint, Erase, Fill, Smudge, Pick colour, and Move for dragging the texture around.
+  Erasing makes the texture transparent.
+- **Fill:** click to fill the connected area of similar colour. While Fill is selected, the slider
+  sets its Tolerance: raise it to take in soft edges, lower it to stay inside a colour. Fill follows
+  colours, not UV islands, so if the same colour runs between two areas it fills both.
+- **Smudge:** drag to smear colours, using the brush and size you've picked.
 - **Brushes:** Square for exact pixels, Round, and Soft for smooth edges. Set the size with the slider
   or its − and + buttons.
 - **Mirror X and Mirror Y:** repeat strokes across the centre of the texture, shown by a dashed line,

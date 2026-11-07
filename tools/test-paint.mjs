@@ -140,6 +140,167 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   doc = blank(255);
   stroke(doc, { colour: [255, 255, 255] }, [[1, 1]]);
   check(!doc.canUndo, 'a stroke that changes nothing isn\'t an undo step');
+
+  // Fill.
+  const put = (target, x, y, rgba) => target.pixels.set(rgba, (y * target.width + x) * 4);
+  const fill = (target, x, y, options = {}) => {
+    target.beginStroke(tool({ mode: 'fill', tolerance: 0, ...options }));
+    target.fill(x, y);
+    target.endStroke();
+  };
+  const orange = '200,100,50,255';
+  const walled = (...columns) => {
+    const target = blank();
+    for (const x of columns) for (let y = 0; y < 32; y++) put(target, x, y, [0, 0, 0, 255]);
+    return target;
+  };
+
+  doc = walled(10);
+  const beforeFill = [...doc.pixels];
+  fill(doc, 3, 3);
+  check(doc.sample(0, 31).join() === orange && doc.sample(9, 0).join() === orange, 'Fill reaches every corner of an area');
+  check(doc.sample(10, 5).join() === '0,0,0,255' && doc.sample(11, 5)[3] === 0, 'and stops at a line');
+  check(painted(doc) === 11 * 32, 'and paints nothing past it', painted(doc));
+  const afterFill = [...doc.pixels];
+  doc.undo();
+  check(doc.pixels.every((v, i) => v === beforeFill[i]) && !doc.canUndo, 'a fill is one undo step');
+  doc.redo();
+  check(doc.pixels.every((v, i) => v === afterFill[i]), 'and one redo');
+  fill(doc, 3, 3);
+  check(doc.done.length === 1, 'filling with the same colour again isn\'t an undo step', doc.done.length);
+
+  doc = blank();
+  for (let i = 0; i <= 8; i++) put(doc, i, 8 - i, [0, 0, 0, 255]);
+  fill(doc, 0, 0);
+  check(painted(doc) === 36 + 9, 'a fill doesn\'t leak through a diagonal line', painted(doc));
+
+  doc = blank();
+  for (let y = 0; y < 32; y++) for (let x = 16; x < 32; x++) put(doc, x, y, [255, 0, 0, 0]);
+  fill(doc, 2, 2);
+  check(painted(doc) === 32 * 32, 'clear pixels all count as the same, whatever colour is hidden in them', painted(doc));
+
+  const gradient = () => {
+    const target = blank();
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) put(target, x, y, [x * 4, x * 4, x * 4, 255]);
+    return target;
+  };
+  const filledColumns = (target) => {
+    let n = 0;
+    for (let x = 0; x < 32; x++) if (target.sample(x, 16).join() === orange) n++;
+    return n;
+  };
+  doc = gradient();
+  fill(doc, 0, 16);
+  check(filledColumns(doc) === 1, 'tolerance 0 takes only the exact colour', filledColumns(doc));
+  doc = gradient();
+  fill(doc, 0, 16, { tolerance: 12 });
+  check(filledColumns(doc) === 4, 'tolerance takes in close colours', filledColumns(doc));
+  doc = gradient();
+  fill(doc, 8, 16, { tolerance: 12 });
+  check(filledColumns(doc) === 7, 'on both sides of the click, measured from the colour clicked', filledColumns(doc));
+
+  const faintEdge = () => {
+    const target = blank();
+    for (let y = 0; y < 32; y++) put(target, 10, y, [200, 100, 50, 8]);
+    return target;
+  };
+  doc = faintEdge();
+  fill(doc, 3, 3);
+  check(doc.sample(10, 3)[3] === 8, 'a faint edge stops a fill at tolerance 0');
+  doc = faintEdge();
+  fill(doc, 3, 3, { tolerance: 12 });
+  check(doc.sample(10, 3).join() === orange, 'but not at 12, however bright its hidden colour');
+
+  doc = walled(8, 23);
+  for (let y = 0; y < 32; y++) for (let x = 24; x < 32; x++) put(doc, x, y, [0, 0, 255, 255]);
+  fill(doc, 3, 3, { mirrorX: true });
+  check(doc.sample(3, 20).join() === orange && doc.sample(28, 20).join() === orange, 'Mirror X fills the area on each side, even if they differ');
+  check(doc.sample(16, 16)[3] === 0, 'and leaves the middle alone');
+  check(doc.done.length === 1, 'as one undo step', doc.done.length);
+
+  doc = walled(8, 23);
+  for (const y of [8, 23]) for (let x = 0; x < 32; x++) put(doc, x, y, [0, 0, 0, 255]);
+  fill(doc, 3, 3, { mirrorX: true, mirrorY: true });
+  const corners = [[3, 3], [28, 3], [3, 28], [28, 28]].every(([x, y]) => doc.sample(x, y).join() === orange);
+  check(corners && doc.sample(16, 16)[3] === 0 && doc.sample(16, 3)[3] === 0, 'Mirror X and Y fill all four corners');
+
+  doc = blank();
+  fill(doc, -1, 5, { mirrorX: true });
+  check(painted(doc) === 0 && !doc.canUndo, 'a fill off the texture does nothing');
+
+  // Smudge.
+  const smear = (target, points, options = {}) => stroke(target, { mode: 'smudge', size: 5, ...options }, points);
+  const halves = () => {
+    const target = blank();
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) put(target, x, y, x < 16 ? [255, 0, 0, 255] : [0, 0, 255, 255]);
+    return target;
+  };
+  doc = halves();
+  const cleanHalves = [...doc.pixels];
+  smear(doc, [[8, 16], [24, 16]]);
+  const [near, far] = [doc.sample(18, 16), doc.sample(23, 16)];
+  check(near[0] > near[2], 'Smudge drags a colour along the stroke', near.join());
+  check(far[0] > 0 && far[0] < near[0], 'and it runs out as it goes', `${near[0]} to ${far[0]}`);
+  check(near[3] === 255 && far[3] === 255, 'solid colours stay solid');
+  check(doc.sample(18, 19).join() === '0,0,255,255' && doc.sample(18, 13).join() === '0,0,255,255', 'only under the brush');
+  check(doc.done.length === 1, 'a smudge is one undo step', doc.done.length);
+  doc.undo();
+  check(doc.pixels.every((v, i) => v === cleanHalves[i]), 'and undo puts back every pixel');
+
+  doc = halves();
+  smear(doc, [[14, 16], [14, 16]]);
+  check(doc.pixels.every((v, i) => v === cleanHalves[i]) && !doc.canUndo, 'a smudge that doesn\'t move does nothing');
+
+  doc = halves();
+  smear(doc, [[8, 16], [24, 16]], { brush: 'soft', size: 9 });
+  check(doc.sample(18, 16)[0] > doc.sample(18, 19)[0], 'a soft brush smears less at its edge', `${doc.sample(18, 16)[0]} and ${doc.sample(18, 19)[0]}`);
+
+  doc = halves();
+  smear(doc, [[-10, 16], [40, 16]], { size: 8 });
+  check(doc.sample(16, 16)[0] > 0, 'smudging off the edge is fine');
+
+  const leftSolid = () => {
+    const target = blank();
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 16; x++) put(target, x, y, [200, 100, 50, 255]);
+    return target;
+  };
+  doc = leftSolid();
+  smear(doc, [[10, 16], [22, 16]]);
+  const trail = doc.sample(19, 16);
+  check(trail.slice(0, 3).join() === '200,100,50' && trail[3] > 0 && trail[3] < 255, 'smudging onto clear fades out with no dark fringe', trail.join());
+  doc = leftSolid();
+  smear(doc, [[22, 16], [10, 16]]);
+  const hole = doc.sample(13, 16);
+  check(hole.slice(0, 3).join() === '200,100,50' && hole[3] < 255, 'smudging clear onto colour thins it, and keeps its colour', hole.join());
+
+  const symmetric = () => {
+    const target = blank();
+    for (let y = 0; y < 32; y++) {
+      for (let x = 0; x < 32; x++) {
+        const [across, down] = [Math.min(x, 31 - x), Math.min(y, 31 - y)];
+        put(target, x, y, [across * 16, down * 16, (across + down) * 8, 255]);
+      }
+    }
+    return target;
+  };
+  const reflected = (target, flipX, flipY) => {
+    for (let y = 0; y < 32; y++) {
+      for (let x = 0; x < 32; x++) {
+        if (target.sample(x, y).join() !== target.sample(flipX ? 31 - x : x, flipY ? 31 - y : y).join()) return false;
+      }
+    }
+    return true;
+  };
+  doc = symmetric();
+  const untouched = [...doc.pixels];
+  smear(doc, [[3, 10], [11, 7]], { size: 3, mirrorX: true });
+  check(reflected(doc, true, false) && doc.pixels.some((v, i) => v !== untouched[i]), 'a smudge with Mirror X is an exact reflection');
+  doc = symmetric();
+  smear(doc, [[3, 10], [11, 7]], { size: 3, mirrorY: true });
+  check(reflected(doc, false, true), 'and with Mirror Y');
+  doc = symmetric();
+  smear(doc, [[3, 10], [11, 7]], { size: 3, mirrorX: true, mirrorY: true });
+  check(reflected(doc, true, false) && reflected(doc, false, true) && doc.done.length === 1, 'and with both, as one undo step');
 }
 
 // --- The page ---
@@ -224,6 +385,8 @@ const keys = await page.evaluate(() => {
 check(keys.order, 'the buttons sit under the palette, with the shortcuts under them');
 const rowHeights = await page.$$eval('#paintBar .seg', (rows) => rows.map((r) => Math.round(r.getBoundingClientRect().height)));
 check(new Set(rowHeights).size === 1, 'the button rows are all one line tall', rowHeights.join(', '));
+const toolHeights = await page.$$eval('#paintBar .toolGrid button', (buttons) => buttons.map((b) => Math.round(b.getBoundingClientRect().height)));
+check(toolHeights.length === 6 && new Set([...toolHeights, rowHeights[0]]).size === 1, 'and so are the tool buttons', toolHeights.join(', '));
 check(keys.inLeft, 'all in the left pane');
 check(keys.fits, 'and it all fits with no scrolling', keys.tall.join(' of '));
 await page.setViewport({ width: 1280, height: 720 });
@@ -236,7 +399,7 @@ check(laptop.fits, 'even in a 1280 x 720 window', laptop.sizes.join(' of '));
 await page.setViewport({ width: 1400, height: 900 });
 await wait(250);
 await page.click('#paintFit');
-for (const word of ['Paint', 'Erase', 'Pick colour', 'Move', 'Brush size', 'Mirror X', 'Mirror Y', 'Undo', 'Redo', 'Pixel grid', 'UV lines', 'Zoom', 'Fit']) {
+for (const word of ['Paint', 'Erase', 'Fill', 'Smudge', 'Pick colour', 'Move', 'Size', 'Tolerance', 'Mirror X', 'Mirror Y', 'Undo', 'Redo', 'Pixel grid', 'UV lines', 'Zoom', 'Fit']) {
   check(keys.text.includes(word), `they list ${word}`);
 }
 check(layout.previewOnRight && layout.inSlot === 'previewSlot', 'the live preview is on the right');
@@ -366,6 +529,117 @@ await page.mouse.up({ button: 'middle' });
 await wait(40);
 check((await page.evaluate(() => window.skinStudio.painter.view.offset.x)) === offsetAfter.x - 30, 'so does a middle-button drag');
 await page.click('#paintFit');
+
+// Fill and Smudge, with the buttons and the real mouse.
+const toolIs = (name) => page.$eval(`#tool-${name}`, (b) => b.classList.contains('active'));
+const steps = () => page.evaluate(() => window.skinStudio.painter.doc.done.length);
+const amount = () => page.evaluate(() => [
+  document.getElementById('sizeLabel').textContent,
+  document.getElementById('brushSize').value,
+  document.getElementById('brushSizeValue').textContent,
+].join());
+const countOf = (rgb) => page.evaluate((c) => {
+  const { pixels } = window.skinStudio.painter.doc;
+  let n = 0;
+  for (let i = 0; i < pixels.length; i += 4) {
+    if (pixels[i] === c[0] && pixels[i + 1] === c[1] && pixels[i + 2] === c[2] && pixels[i + 3] === 255) n++;
+  }
+  return n;
+}, rgb);
+const clickTexel = async (x, y) => {
+  const spot = await at(x, y);
+  await page.mouse.click(spot.x, spot.y);
+  await wait(80);
+};
+const brushBeforeTools = await page.evaluate(() => window.skinStudio.painter.view.tool.size);
+const hashBeforeTools = await docHash();
+const stepsBeforeTools = await steps();
+const recentBefore = await page.$$eval('#recentColours .swatch', (s) => s.map((n) => n.title).join());
+const blue = [47, 128, 237];
+const yellow = [247, 208, 56];
+
+await page.click('#tool-paint');
+await page.click('#brush-square');
+await setSize(20);
+await page.click('#palette .swatch[title="#2f80ed"]');
+await clickTexel(60, 60);
+const blueBlock = await countOf(blue);
+check(blueBlock >= 400, 'a block to fill', blueBlock);
+
+await page.click('#tool-fill');
+check(await toolIs('fill') && !await toolIs('paint'), 'the Fill button selects Fill');
+check(await amount() === 'Tolerance,12,12', 'the Size slider becomes Tolerance', await amount());
+await setSize(30);
+await page.keyboard.press(']');
+check(await amount() === 'Tolerance,31,31', 'which the slider and ] both set', await amount());
+await setSize(12);
+await page.click('#palette .swatch[title="#f7d038"]');
+check(await toolIs('fill'), 'picking a colour stays on Fill');
+const yellowBefore = await countOf(yellow);
+await clickTexel(60, 60);
+check(await countOf(blue) === blueBlock - 400 && await countOf(yellow) === yellowBefore + 400, 'a real click fills the block, and only the block', await countOf(yellow) - yellowBefore);
+check(await steps() === stepsBeforeTools + 2, 'as one undo step');
+check((await page.$$eval('#recentColours .swatch', (s) => s.map((n) => n.title)))[0] === '#f7d038', 'and its colour joins Recent');
+const afterFillClick = await docHash();
+const blockSpot = await at(60, 60);
+await page.keyboard.press('k');
+await page.mouse.move(blockSpot.x, blockSpot.y);
+await page.mouse.down();
+await page.mouse.move(blockSpot.x + 120, blockSpot.y + 60, { steps: 5 });
+await page.mouse.up();
+await wait(60);
+check(await docHash() === afterFillClick && await steps() === stepsBeforeTools + 2, 'dragging with Fill doesn\'t paint a trail');
+const pickSpotFill = await at(125, 110);
+const previewBeforeFill = await hashOf('#canvasBox');
+await page.click('#palette .swatch[title="#2f80ed"]');
+await page.mouse.click(pickSpotFill.x, pickSpotFill.y);
+await wait(250);
+check(await hashOf('#canvasBox') !== previewBeforeFill, 'the 3D preview follows a fill');
+await page.click('#paintUndo');
+await wait(250);
+check(await hashOf('#canvasBox') === previewBeforeFill, 'and its undo');
+await page.keyboard.down('Alt');
+await clickTexel(60, 60);
+await page.keyboard.up('Alt');
+check(await toolIs('fill') && await page.$eval('#paintHex', (n) => n.textContent) === '#f7d038', 'Alt + click picks a colour without leaving Fill');
+await page.keyboard.press('s');
+check(await toolIs('smudge') && await amount() === 'Size,20,20', 'S selects Smudge, and the slider is the brush size again', await amount());
+await setSize(5);
+await page.keyboard.press('k');
+check(await toolIs('fill') && await amount() === 'Tolerance,12,12', 'K selects Fill, and its tolerance was kept', await amount());
+await page.click('#tool-smudge');
+check(await toolIs('smudge'), 'the Smudge button selects Smudge');
+await page.keyboard.down('Control');
+await page.keyboard.press('s');
+await page.keyboard.up('Control');
+await page.keyboard.press('b');
+await page.keyboard.down('Control');
+await page.keyboard.press('s');
+await page.keyboard.up('Control');
+check(await toolIs('paint'), 'Ctrl + S doesn\'t pick Smudge');
+await page.keyboard.press('s');
+
+const recentBeforeSmudge = await page.$$eval('#recentColours .swatch', (s) => s.map((n) => n.title).join());
+const outside = await pixel(78, 60);
+const closeness = (rgba) => Math.hypot(rgba[0] - yellow[0], rgba[1] - yellow[1], rgba[2] - yellow[2]);
+const beforeSmudge = await docHash();
+await drag([[60, 60], [84, 60]]);
+const smeared = await pixel(78, 60);
+check(closeness(smeared) < closeness(outside), 'a real drag smears the block\'s colour out of it', `${outside.join()} to ${smeared.join()}`);
+check(await steps() === stepsBeforeTools + 3, 'as one undo step');
+check(await page.$$eval('#recentColours .swatch', (s) => s.map((n) => n.title).join()) === recentBeforeSmudge, 'and Recent is left alone');
+await page.click('#paintUndo');
+await wait(60);
+check(await docHash() === beforeSmudge, 'Undo takes the smudge back off');
+await page.click('#palette .swatch[title="#e63b2e"]');
+check(await toolIs('paint'), 'picking a colour on Smudge goes back to painting, as on Erase');
+
+await page.click('#paintUndo');
+await page.click('#paintUndo');
+await wait(60);
+check(await docHash() === hashBeforeTools, 'and the whole lot undoes back to where it started');
+await setSize(brushBeforeTools);
+await page.mouse.move(5, 5);
 
 // Every shortcut has a button too.
 const zoomNow = () => page.evaluate(() => window.skinStudio.painter.view.zoom);

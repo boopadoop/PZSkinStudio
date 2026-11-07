@@ -32,14 +32,15 @@
 
       <h3>Tools</h3>
       <div id="paintBar">
-        <div class="seg wide" role="group" aria-label="Tool">
-          <button id="tool-paint" title="Paint (B)">Paint</button><button id="tool-erase" title="Erase to transparent (E)">Erase</button><button id="tool-pick" title="Pick a colour from the texture (I)">Pick colour</button><button id="tool-move" title="Drag to move the texture (M)">Move</button>
+        <div class="toolGrid" role="group" aria-label="Tool">
+          <button id="tool-paint" title="Paint (B)">Paint</button><button id="tool-erase" title="Erase to transparent (E)">Erase</button><button id="tool-fill" title="Fill an area of similar colour (K)">Fill</button>
+          <button id="tool-smudge" title="Drag to smear colours, using the brush and size below (S)">Smudge</button><button id="tool-pick" title="Pick a colour from the texture (I)">Pick colour</button><button id="tool-move" title="Drag to move the texture (M)">Move</button>
         </div>
         <div class="seg wide" role="group" aria-label="Brush">
           <button id="brush-square" title="Hard square, for pixel work">Square</button><button id="brush-round" title="Hard round brush">Round</button><button id="brush-soft" title="Round brush with soft edges">Soft</button>
         </div>
-        <div class="sizeControl" title="Brush size in texture pixels">
-          Size
+        <div id="sizeRow" class="sizeControl" title="Brush size in texture pixels">
+          <span id="sizeLabel">Size</span>
           <button id="brushSmaller" aria-label="Smaller brush" title="Smaller brush ([)">−</button>
           <input id="brushSize" type="range" min="1" max="64" value="1" aria-label="Brush size">
           <button id="brushBigger" aria-label="Bigger brush" title="Bigger brush (])">+</button>
@@ -62,14 +63,14 @@
       <h3>Shortcuts</h3>
       <dl id="paintKeys">
         <dt><kbd>B</kbd> <kbd>E</kbd></dt><dd>Paint, Erase</dd>
+        <dt><kbd>K</kbd> <kbd>S</kbd></dt><dd>Fill, Smudge</dd>
         <dt><kbd>I</kbd> or <kbd>Alt</kbd> + click</dt><dd>Pick colour</dd>
         <dt><kbd>M</kbd> or <kbd>Space</kbd> + drag</dt><dd>Move</dd>
-        <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Brush size</dd>
+        <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Size, Tolerance</dd>
         <dt><kbd>X</kbd> <kbd>Y</kbd></dt><dd>Mirror X, Mirror Y</dd>
         <dt><kbd>Ctrl</kbd> + <kbd>Z</kbd> <kbd>Y</kbd></dt><dd>Undo, Redo</dd>
         <dt><kbd>G</kbd> <kbd>U</kbd></dt><dd>Pixel grid, UV lines</dd>
-        <dt>Scroll or <kbd>-</kbd> <kbd>+</kbd></dt><dd>Zoom</dd>
-        <dt><kbd>F</kbd></dt><dd>Fit</dd>
+        <dt>Scroll, <kbd>-</kbd> <kbd>+</kbd>, <kbd>F</kbd></dt><dd>Zoom, Fit</dd>
       </dl>
     </div>
   </aside>

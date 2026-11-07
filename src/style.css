@@ -41,7 +41,7 @@ button.block { display: block; width: 100%; }
 .seg button { border-radius: 0; margin-left: -1px; }
 .seg button:first-child { border-radius: 5px 0 0 5px; margin-left: 0; }
 .seg button:last-child { border-radius: 0 5px 5px 0; }
-.seg button.active { background: var(--accent); border-color: var(--accent); color: #231304; }
+:is(.seg, .toolGrid) button.active { background: var(--accent); border-color: var(--accent); color: #231304; }
 .seg.wide { display: flex; margin-top: 8px; }
 .seg.wide button { flex: 1; }
 
@@ -106,6 +106,8 @@ body.painting.bigPreview #app { grid-template-columns: 220px minmax(0, 1fr) 55vw
 #paintStatus { position: absolute; left: 8px; bottom: 6px; font-size: 12px; color: var(--muted); pointer-events: none; text-shadow: 0 1px 2px #000; }
 #paintBar { display: flex; flex-direction: column; gap: 4px; }
 #paintBar .seg.wide { margin-top: 0; }
+.toolGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; }
+.toolGrid button { min-width: 0; }
 #paintBar button { padding: 3px 4px; white-space: nowrap; }
 #paintBar .seg.wide button { flex: auto; }
 #paintBar output { min-width: 2ch; text-align: right; }

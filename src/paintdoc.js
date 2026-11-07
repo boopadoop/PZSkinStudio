@@ -6,6 +6,7 @@
 const HISTORY_BYTES = 256 * 1024 * 1024;
 const ROUND_TRIM = 0.1;     // so a 3 pixel round brush is a plus, not a square
 const SOFT_CORE = 0.25;     // how far out a soft brush stays solid, as a share of its radius
+const SMUDGE_PULL = 0.85;   // how much of the colour a smudge carries on from one step to the next
 
 function smoothstep(edge0, edge1, value) {
   const t = Math.min(Math.max((value - edge0) / (edge1 - edge0), 0), 1);
@@ -69,13 +70,13 @@ export class PaintDocument {
     return [...this.pixels.subarray((y * this.width + x) * 4, (y * this.width + x) * 4 + 4)];
   }
 
-  // tool: { mode: 'paint' or 'erase', brush: 'square', 'round' or 'soft', size, colour: [r, g, b],
-  // mirrorX, mirrorY }. Mirror X repeats a stroke across the texture's centre from left to right, and
-  // Mirror Y from top to bottom.
+  // tool: { mode: 'paint', 'erase', 'smudge' or 'fill', brush: 'square', 'round' or 'soft', size,
+  // colour: [r, g, b], tolerance, mirrorX, mirrorY }. Mirror X repeats a stroke across the texture's
+  // centre from left to right, and Mirror Y from top to bottom.
   beginStroke(tool) {
     this.base.set(this.pixels);
     this.cover.fill(0);
-    this.stroke = { ...tool, mask: brushMask(tool.brush, tool.size), last: null, area: null };
+    this.stroke = { ...tool, mask: brushMask(tool.brush, tool.size), last: null, area: null, carried: [] };
   }
 
   // Every point of a drag, joined up so a fast one leaves no gaps.
@@ -93,10 +94,104 @@ export class PaintDocument {
   }
 
   dab(cx, cy) {
-    const { size, mirrorX, mirrorY } = this.stroke;
-    for (const { left, top } of footprints(cx, cy, size, this.width, this.height, mirrorX, mirrorY)) {
-      this.stamp(left, top);
+    const { size, mode, mirrorX, mirrorY } = this.stroke;
+    footprints(cx, cy, size, this.width, this.height, mirrorX, mirrorY).forEach(({ left, top }, copy) => {
+      if (mode === 'smudge') this.smudge(left, top, copy);
+      else this.stamp(left, top);
+    });
+  }
+
+  // Blends what the brush is carrying into the pixels under it, and picks up some of them in turn.
+  // Each mirrored copy carries its own colours. Colours are weighed by their alpha, or the hidden
+  // colour of a see-through pixel would bleed in as a dark fringe.
+  smudge(left, top, copy) {
+    const { width, height, pixels } = this;
+    const { size, mask, carried } = this.stroke;
+    const carry = carried[copy] ??= new Float32Array(size * size * 4).fill(-1);
+    const [fromX, toX] = [Math.max(left, 0), Math.min(left + size, width) - 1];
+    const [fromY, toY] = [Math.max(top, 0), Math.min(top + size, height) - 1];
+    if (fromX > toX || fromY > toY) return;
+    for (let py = fromY; py <= toY; py++) {
+      for (let px = fromX; px <= toX; px++) {
+        const i = (py * width + px) * 4;
+        const cell = (py - top) * size + (px - left);
+        const c = cell * 4;
+        const alpha = pixels[i + 3] / 255;
+        if (carry[c + 3] < 0) {
+          for (let k = 0; k < 3; k++) carry[c + k] = pixels[i + k] * alpha;
+          carry[c + 3] = alpha;
+          continue;
+        }
+        const pull = SMUDGE_PULL * mask[cell];
+        const mixedAlpha = alpha * (1 - pull) + carry[c + 3] * pull;
+        for (let k = 0; k < 3; k++) {
+          const here = pixels[i + k] * alpha;
+          if (mixedAlpha > 0) pixels[i + k] = (here * (1 - pull) + carry[c + k] * pull) / mixedAlpha;
+          carry[c + k] = carry[c + k] * SMUDGE_PULL + here * (1 - SMUDGE_PULL);
+        }
+        pixels[i + 3] = mixedAlpha * 255;
+        carry[c + 3] = carry[c + 3] * SMUDGE_PULL + alpha * (1 - SMUDGE_PULL);
+      }
     }
+    this.grow(fromX, fromY);
+    this.grow(toX, toY);
+  }
+
+  // Fills the area of similar colour around a pixel, and around its mirrored copies.
+  fill(x, y) {
+    const { mirrorX, mirrorY } = this.stroke;
+    for (const seed of footprints(x, y, 1, this.width, this.height, mirrorX, mirrorY)) {
+      this.fillFrom(seed.left, seed.top);
+    }
+  }
+
+  // Colours are compared by how much of them shows, so all clear pixels look the same whatever
+  // colour is hidden in them, and a faint edge looks like the clear pixels next to it.
+  matches(i, seed) {
+    const { base } = this;
+    const { tolerance } = this.stroke;
+    if (Math.abs(base[i + 3] - base[seed + 3]) > tolerance) return false;
+    const [alpha, seedAlpha] = [base[i + 3] / 255, base[seed + 3] / 255];
+    for (let c = 0; c < 3; c++) {
+      if (Math.abs(base[i + c] * alpha - base[seed + c] * seedAlpha) > tolerance) return false;
+    }
+    return true;
+  }
+
+  // Reads the texture as it was before this fill, so mirrored copies each find their own area.
+  fillFrom(x, y) {
+    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return;
+    const { width, height, pixels } = this;
+    const [red, green, blue] = this.stroke.colour;
+    const seed = (y * width + x) * 4;
+    const seen = new Uint8Array(width * height);
+    const waiting = [y * width + x];
+    seen[waiting[0]] = 1;
+    const visit = (next) => {
+      if (seen[next] || !this.matches(next * 4, seed)) return;
+      seen[next] = 1;
+      waiting.push(next);
+    };
+    let [left, right, top, bottom] = [x, x, y, y];
+    while (waiting.length) {
+      const at = waiting.pop();
+      const px = at % width;
+      const py = (at - px) / width;
+      pixels[at * 4] = red;
+      pixels[at * 4 + 1] = green;
+      pixels[at * 4 + 2] = blue;
+      pixels[at * 4 + 3] = 255;
+      left = Math.min(left, px);
+      right = Math.max(right, px);
+      top = Math.min(top, py);
+      bottom = Math.max(bottom, py);
+      if (px > 0) visit(at - 1);
+      if (px < width - 1) visit(at + 1);
+      if (py > 0) visit(at - width);
+      if (py < height - 1) visit(at + width);
+    }
+    this.grow(left, top);
+    this.grow(right, bottom);
   }
 
   stamp(left, top) {

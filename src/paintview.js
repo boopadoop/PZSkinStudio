@@ -29,7 +29,7 @@ export class PaintView {
     this.context = canvas.getContext('2d');
     this.handlers = handlers;
     this.checker = checkerPattern(this.context);
-    this.tool = { mode: 'paint', brush: 'square', size: 1, colour: [0, 0, 0], mirrorX: false, mirrorY: false };
+    this.tool = { mode: 'paint', brush: 'square', size: 1, tolerance: 12, colour: [0, 0, 0], mirrorX: false, mirrorY: false };
     this.showGrid = false;
     this.showUv = false;
     this.doc = null;
@@ -134,6 +134,14 @@ export class PaintView {
     if (this.tool.mode === 'pick' || event.altKey) {
       this.drag = { kind: 'pick' };
       this.pick(texel);
+      return;
+    }
+    if (this.tool.mode === 'fill') {
+      this.doc.beginStroke(this.tool);
+      this.doc.fill(texel.x, texel.y);
+      this.doc.endStroke();
+      this.handlers.onStrokeChange();
+      this.handlers.onStrokeEnd();
       return;
     }
     this.drag = { kind: 'paint' };
@@ -303,14 +311,15 @@ export class PaintView {
     if (!this.hover || this.moving || this.drag?.kind === 'pan') return;
     const { context, doc, offset, zoom, tool } = this;
     const picking = tool.mode === 'pick';
-    const size = picking ? 1 : tool.size;
+    const onePixel = picking || tool.mode === 'fill';
+    const size = onePixel ? 1 : tool.size;
     const across = size * zoom;
     const spots = footprints(this.hover.x, this.hover.y, size, doc.width, doc.height, !picking && tool.mirrorX, !picking && tool.mirrorY);
     const outline = (left, top, shift, colour) => {
       context.strokeStyle = colour;
       context.lineWidth = 1;
       context.beginPath();
-      if (tool.brush === 'square' || picking) context.rect(left + shift, top + shift, across, across);
+      if (tool.brush === 'square' || onePixel) context.rect(left + shift, top + shift, across, across);
       else context.arc(left + across / 2 + shift, top + across / 2 + shift, across / 2, 0, Math.PI * 2);
       context.stroke();
     };
