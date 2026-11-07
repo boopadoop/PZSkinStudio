@@ -1,0 +1,9 @@
+node_modules/
+
+# The game's files and mods belong to their authors, so each person adds their own.
+models/*
+!models/README.md
+
+# Your own skins.
+skins/*
+!skins/.gitkeep

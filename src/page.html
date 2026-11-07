@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PZ Skin Studio</title>
+<style>/*CSS*/</style>
+</head>
+<body>
+<div id="app">
+  <aside id="left">
+    <h1>PZ Skin Studio</h1>
+    <div id="browse">
+      <div class="buttons">
+        <button id="openFolder">Open folder</button>
+        <button id="rescan" hidden title="Read the folder again after adding or removing files">Rescan</button>
+      </div>
+      <p id="folderStatus" class="muted">No folder open</p>
+      <input id="search" type="search" placeholder="Search characters" aria-label="Search characters" disabled>
+      <div id="list"></div>
+    </div>
+
+    <div id="paintColours" hidden>
+      <h3>Colour</h3>
+      <div class="colourRow">
+        <input id="paintColour" type="color" aria-label="Paint colour" title="Choose any colour">
+        <span id="paintHex" class="muted"></span>
+      </div>
+      <div id="palette" class="palette"></div>
+      <h3>Recent</h3>
+      <div id="recentColours" class="palette"></div>
+
+      <h3>Tools</h3>
+      <div id="paintBar">
+        <div class="seg wide" role="group" aria-label="Tool">
+          <button id="tool-paint" title="Paint (B)">Paint</button><button id="tool-erase" title="Erase to transparent (E)">Erase</button><button id="tool-pick" title="Pick a colour from the texture (I)">Pick colour</button><button id="tool-move" title="Drag to move the texture (M)">Move</button>
+        </div>
+        <div class="seg wide" role="group" aria-label="Brush">
+          <button id="brush-square" title="Hard square, for pixel work">Square</button><button id="brush-round" title="Hard round brush">Round</button><button id="brush-soft" title="Round brush with soft edges">Soft</button>
+        </div>
+        <div class="sizeControl" title="Brush size in texture pixels">
+          Size
+          <button id="brushSmaller" aria-label="Smaller brush" title="Smaller brush ([)">−</button>
+          <input id="brushSize" type="range" min="1" max="64" value="1" aria-label="Brush size">
+          <button id="brushBigger" aria-label="Bigger brush" title="Bigger brush (])">+</button>
+          <output id="brushSizeValue">1</output>
+        </div>
+        <div class="seg wide" role="group" aria-label="Mirror strokes">
+          <button id="mirrorX" aria-pressed="false" title="Repeat strokes on the other side, left to right. Mirrors the character's body on nearly every model (X)">Mirror X ↔</button><button id="mirrorY" aria-pressed="false" title="Repeat strokes top to bottom. Good for patterns: a model's top and bottom halves don't match (Y)">Mirror Y ↕</button>
+        </div>
+        <div class="seg wide">
+          <button id="paintUndo" disabled title="Undo (Ctrl + Z)">Undo</button><button id="paintRedo" disabled title="Redo (Ctrl + Y)">Redo</button>
+        </div>
+        <div class="seg wide" role="group" aria-label="Guides">
+          <button id="paintGrid" aria-pressed="false" title="Show each pixel. Only a guide: it isn't part of the texture (G)">Pixel grid</button><button id="paintUv" aria-pressed="false" title="Show the model's UV layout. Only a guide: it isn't part of the texture (U)">UV lines</button>
+        </div>
+        <div class="seg wide" role="group" aria-label="Zoom">
+          <button id="zoomOut" title="Zoom out (-)">Zoom −</button><button id="zoomIn" title="Zoom in (+)">Zoom +</button><button id="paintFit" title="Fit the whole texture on screen (F)">Fit</button>
+        </div>
+      </div>
+
+      <h3>Shortcuts</h3>
+      <dl id="paintKeys">
+        <dt><kbd>B</kbd> <kbd>E</kbd></dt><dd>Paint, Erase</dd>
+        <dt><kbd>I</kbd> or <kbd>Alt</kbd> + click</dt><dd>Pick colour</dd>
+        <dt><kbd>M</kbd> or <kbd>Space</kbd> + drag</dt><dd>Move</dd>
+        <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Brush size</dd>
+        <dt><kbd>X</kbd> <kbd>Y</kbd></dt><dd>Mirror X, Mirror Y</dd>
+        <dt><kbd>Ctrl</kbd> + <kbd>Z</kbd> <kbd>Y</kbd></dt><dd>Undo, Redo</dd>
+        <dt><kbd>G</kbd> <kbd>U</kbd></dt><dd>Pixel grid, UV lines</dd>
+        <dt>Scroll or <kbd>-</kbd> <kbd>+</kbd></dt><dd>Zoom</dd>
+        <dt><kbd>F</kbd></dt><dd>Fit</dd>
+      </dl>
+    </div>
+  </aside>
+
+  <main id="stage">
+    <div id="toolbar">
+      <button id="paintOpen" class="primary" disabled title="Paint on this skin and watch it change on the model">Paint</button>
+      <span class="seg">
+        <button id="view-front">Front</button><button id="view-back">Back</button><button id="view-left">Left</button><button id="view-right">Right</button>
+      </span>
+      <span class="seg" role="group" aria-label="Rotate the model a quarter turn" title="For a model that loads on its side. Only changes this preview, and each model remembers its setting">
+        <button id="turn-x" title="Tip it a quarter turn, for a model lying on its back">Tilt</button><button id="turn-y" title="Spin it a quarter turn, for a model facing sideways">Turn</button><button id="turn-z" title="Roll it a quarter turn, for a model lying on its side">Roll</button><button id="turn-reset" title="Put this model back as it loaded" disabled>Reset</button>
+      </span>
+      <label title="Turn the model slowly"><input id="opt-spin" type="checkbox"> Spin</label>
+      <label title="Off shows the plain texture colours"><input id="opt-lit" type="checkbox" checked> Lighting</label>
+      <label title="Show the polygon lines"><input id="opt-wire" type="checkbox"> Wireframe</label>
+      <label title="Draw the inside of surfaces, which the game may not show"><input id="opt-back" type="checkbox"> Back faces</label>
+      <label title="Show each texture pixel as a hard square"><input id="opt-crisp" type="checkbox"> Sharp pixels</label>
+    </div>
+    <div id="paintBox" hidden>
+      <canvas id="paintCanvas"></canvas>
+      <div id="paintStatus"></div>
+    </div>
+    <div id="canvasBox"><canvas id="view"></canvas></div>
+
+    <div id="welcome" hidden>
+      <h2>Open your studio folder</h2>
+      <p>Pick the folder this page is in. Models come from its <code>models</code> folder and saved skins from its <code>skins</code> folder.</p>
+      <p>You only need to do this once. After that the studio opens by itself.</p>
+      <div class="buttons center">
+        <button id="welcomeOpen" class="primary">Open folder</button>
+      </div>
+      <p class="muted">Nothing leaves your computer. This page has no server, and what it reads stays in your browser.</p>
+    </div>
+
+    <div id="busy" hidden>
+      <div id="busyLabel"></div>
+      <progress id="busyBar" max="1" value="0"></progress>
+    </div>
+  </main>
+
+  <aside id="right">
+    <div id="paintSide" hidden>
+      <h2 id="paintTitle"></h2>
+      <p id="paintWhat" class="muted small"></p>
+      <div id="previewSlot"></div>
+      <p class="muted small">Drag to turn the model, right-drag to move it, scroll to zoom.</p>
+      <button id="previewBig" class="block">Enlarge preview</button>
+      <p id="paintUnsaved" class="note warn" hidden>You have unsaved changes.</p>
+      <button id="paintSave" class="primary block">Save as…</button>
+      <button id="paintClose" class="block">Close paint</button>
+    </div>
+
+    <section>
+      <h2 id="modelName">No model</h2>
+      <p id="modelGroup" class="muted"></p>
+      <div class="seg wide" role="group" aria-label="Body">
+        <button id="body-male" disabled>Male</button><button id="body-female" disabled>Female</button>
+      </div>
+      <p id="bodyNote" class="note"></p>
+      <p id="modelStats" class="muted small"></p>
+    </section>
+
+    <section>
+      <button id="importSkin" class="primary block">Import skin</button>
+      <p class="muted small">Or drag a .png or .skin.zip anywhere on this page.</p>
+      <div id="customFields" hidden>
+        <p id="colourNote" class="note warn" hidden></p>
+        <label class="field">Skin name <input id="skinName" type="text" maxlength="60"></label>
+        <label class="field">Made by <input id="skinAuthor" type="text" maxlength="60"></label>
+        <button id="exportSkin" class="primary block">Export skin</button>
+        <p class="muted small">Makes one .skin.zip with the texture and its model link, ready to send.</p>
+        <p id="watchNote" class="muted small" hidden>Watching this file: saving it in your paint program updates the preview.</p>
+      </div>
+      <p id="paintHint" class="muted small">To make a skin, click Paint, or download this texture and the UV guide, paint over them in your own program, then import your PNG.</p>
+    </section>
+
+    <section id="skins"></section>
+
+    <section>
+      <h3>Texture <span id="textureSize" class="muted"></span></h3>
+      <canvas id="texture" width="512" height="512"></canvas>
+      <label class="check"><input id="showUv" type="checkbox"> Show UV lines</label>
+      <div class="buttons">
+        <button id="downloadPng" disabled>Download texture</button>
+        <button id="downloadGuide">Download UV guide</button>
+      </div>
+    </section>
+  </aside>
+</div>
+<dialog id="saveDialog">
+  <form method="dialog">
+    <h2>Save as</h2>
+    <label class="field">Skin name <input id="saveName" type="text" maxlength="60" required></label>
+    <p class="muted small">Saves a PNG, and adds the skin to Your skins on this model so you can export it.</p>
+    <div class="buttons right">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button id="saveConfirm" value="save" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+<div id="dropHint">Drop your skin here</div>
+<div id="toast" role="status"></div>
+<input id="dirInput" type="file" webkitdirectory hidden>
+<input id="fileInput" type="file" accept=".png,.zip" multiple hidden>
+<script>/*JS*/</script>
+</body>
+</html>
