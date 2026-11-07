@@ -1,8 +1,10 @@
 node_modules/
 
-# The game's files and mods belong to their authors, so each person adds their own.
+# Mods belong to their authors, so each person adds their own. The game's human bodies are included
+# under The Indie Stone's terms: see models/VanillaHumans/README.md.
 models/*
 !models/README.md
+!models/VanillaHumans/
 
 # Your own skins.
 skins/*

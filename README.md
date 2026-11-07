@@ -4,15 +4,18 @@ A skin maker's preview and pixel editor for Project Zomboid character models. Pi
 skin on it in 3D, paint on it, and pass skins around as single files. It runs in your browser from one HTML
 file, with nothing to install and nothing uploaded anywhere.
 
-This project is only the tool. It doesn't include the game's files or any mod's files: you add those
-yourself from your own copy, as described below. It isn't made by or connected with The Indie Stone.
+It only makes skins, not mods, and it never changes the game's or a mod's own files. The models are
+there to show what a skin will look like. The game's human bodies are included as an example, and
+you add any other models yourself from the mods you have, as described below.
+
+Thanks to The Indie Stone for creating Project Zomboid (https://projectzomboid.com/), which made this possible. This is an unofficial fan production for non-commercial purposes made under the Indie Stone Terms (https://projectzomboid.com/blog/support/terms-conditions/).
 
 ## Getting started
 
 1. **Download the studio.** Click the green **Code** button on this page, then **Download ZIP**, and
    unzip it somewhere you can find it.
-2. **Add the mods you want to make skins for.** The studio comes with no models, so you bring your
-   own: copy a mod's whole folder into the `models` folder.
+2. **Add the mods you want to make skins for.** The game's human bodies are already there. For
+   anything else, copy a mod's whole folder into the `models` folder.
 3. **Open `PZSkinStudio.html`** in Firefox, Chrome or Edge. Nothing needs installing.
 4. **Click Open folder** and pick the folder that page is in. You only do this once: the studio keeps
    its own copy of what it read in your browser, so next time it opens by itself, with no questions.
@@ -116,12 +119,10 @@ darker still in shade or at night. Turn off **Lighting** in the toolbar to see t
 ## Human skins
 
 The `VanillaHumans` pack in `models` holds the game's own male and female bodies, listed under
-**Human Skins**. It's made from your game files by:
+**Human Skins**, and shows how a pack is laid out. If a game update changes the bodies, this makes the
+pack again from your own game, using Node.js. Click **Rescan** afterwards.
 
     node tools/import-vanilla-humans.mjs "<path to ProjectZomboid/media>"
-
-Run that again if a game update changes the bodies, then click **Rescan**. It's copied from the game,
-so only share it with people who own the game.
 
 Two things are different from other skins:
 
@@ -191,5 +192,9 @@ the preview with the real game, and needs a local test setup that isn't part of 
 
 ## Licence
 
-PZ Skin Studio is under the MIT licence: see `LICENSE`. It includes three.js and fflate, also MIT, and
-their notices are at the top of `PZSkinStudio.html`.
+The studio's code is under the MIT licence: see `LICENSE`. It includes three.js and fflate, also MIT,
+and their notices are at the top of `PZSkinStudio.html`.
+
+**The MIT licence doesn't cover `models/VanillaHumans`.** Those are The Indie Stone's own models and
+textures, included under the Project Zomboid terms. They can't be used commercially, and they keep
+the credit at the top of this page.

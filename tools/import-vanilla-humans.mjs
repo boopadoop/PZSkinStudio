@@ -17,6 +17,9 @@ const packId = 'VanillaHumans';
 const pack = path.join(root, 'models', packId);
 const groupId = `${packId}_Human`;
 
+// The Indie Stone's terms ask for this wording with any of their assets, so it's written with them.
+const CREDIT = 'Thanks to The Indie Stone for creating Project Zomboid (https://projectzomboid.com/), which made this possible. This is an unofficial fan production for non-commercial purposes made under the Indie Stone Terms (https://projectzomboid.com/blog/support/terms-conditions/).';
+
 const NUMBER = /-?\d+(?:\.\d+)?(?:e[-+]?\d+)?/gi;
 
 function blockAfter(text, start) {
@@ -226,6 +229,21 @@ fs.mkdirSync(path.join(pack, 'media/clothing/clothingItems'), { recursive: true 
 fs.mkdirSync(path.join(pack, 'media/textures/Body'), { recursive: true });
 fs.mkdirSync(path.join(pack, `media/lua/shared/${packId}`), { recursive: true });
 fs.writeFileSync(path.join(pack, 'mod.info'), `name=Project Zomboid humans\nid=${packId}\n`);
+fs.writeFileSync(path.join(pack, 'README.md'), `# The game's human bodies
+
+These are The Indie Stone's own models and textures from Project Zomboid, here so the studio has
+something to show straight away and as an example of how a pack is laid out. The models are copies for
+the preview, with no bones. Skins made on them use the game's real models.
+
+${CREDIT}
+
+The MIT licence on the rest of this project does not cover these files. They can't be used
+commercially, and they belong to The Indie Stone.
+
+To make them again from your own game, for instance after an update:
+
+    node tools/import-vanilla-humans.mjs "<path to ProjectZomboid/media>"
+`);
 
 const body = path.join(media, 'textures/Body');
 for (const [gender, name] of [['Male', 'Human_Male'], ['Female', 'Human_Female']]) {
