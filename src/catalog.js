@@ -161,6 +161,16 @@ export async function scanFolder(entries, folderName, onProgress) {
     }
   }
 
+  // A leftover clothing item on a model that a species uses belongs with that species. Anthro
+  // Survivors' own Furry_MaleRacoon item is one: no species lists it, but its model is the one the
+  // Racoon group's Common and Spiffy wear, so a skin painted on it is a Racoon skin.
+  const groupOfModel = new Map();
+  for (const c of characters) {
+    for (const v of Object.values(c.bodies)) {
+      if (v && !groupOfModel.has(v.model.tail)) groupOfModel.set(v.model.tail, { group: c.group, groupId: c.groupId });
+    }
+  }
+
   // Anything in the folder that no species.lua mentions still gets listed, so a model can be
   // tried out by dropping it in. Male/Female twins are joined into one character.
   const loose = new Map();
@@ -168,8 +178,9 @@ export async function scanFolder(entries, folderName, onProgress) {
     const m = /^(.*?)(male|female)(.*)$/i.exec(name);
     const key = m ? `${m[1]}${m[3]}`.toLowerCase() : name.toLowerCase();
     const display = (m ? `${m[3] || m[1]}` : name).replace(/^Furry_/, '') || name;
+    const home = groupOfModel.get(variant.model.tail) ?? { group: 'Not in a species list', groupId: '' };
     const character = loose.get(key) ?? {
-      id: key, display, group: 'Not in a species list', groupId: '', pack, bodies: { male: null, female: null },
+      id: key, display, group: home.group, groupId: home.groupId, pack, bodies: { male: null, female: null },
     };
     const body = m ? m[2].toLowerCase() : 'male';
     character.bodies[body] = { ...variant, body };

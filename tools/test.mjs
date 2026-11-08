@@ -543,6 +543,7 @@ await stop();
     return {
       count: chars.length,
       loose: chars.filter((c) => c.group === 'Not in a species list').map((c) => c.display),
+      racoon: chars.filter((c) => /racoon/i.test(c.id) || c.group === 'Racoon').map((c) => `${c.display}:${c.group}`),
       packs: [...new Set(chars.map((c) => c.pack.id))],
       saved: state.customSkins.map((s) => s.name),
       errors: chars.flatMap((c) => Object.values(c.bodies)).filter((v) => v?.error).map((v) => `${v.item}: ${v.error}`),
@@ -557,6 +558,8 @@ await stop();
   check(tiles.includes('Mara (male)') && tiles.includes('Mara (female)'), 'two different pictures for one character are both offered', tiles.join(', '));
   check(seen.packs.includes('Loose'), 'a loose folder is named after itself');
   check(seen.count > 280 && seen.loose.includes('MyModel'), 'a loose model appears', seen.count);
+  check(!seen.packs.includes('FurryModB42') || ['Common:Racoon', 'Spiffy:Racoon', 'Racoon:Racoon'].every((r) => seen.racoon.includes(r)),
+    'an unused item on a species\' model is listed with that species (Racoon)', seen.racoon.join(', '));
   check(seen.packs.length >= 2, 'a dropped-in pack appears', seen.packs.join(', '));
   check(seen.saved.length === 1, 'skins/ is read on open', seen.saved[0]);
   check(!second.problems.length, 'no errors with extra packs', second.problems.slice(0, 3).join(' | '));

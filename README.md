@@ -34,7 +34,9 @@ You can add as many mods as you like. Click **Rescan** after adding or removing 
 doesn't look at the folder again until you do.
 
 - **Any mod with FBX character models works.** Anthro Survivors species packs are listed under their
-  species, and models from other mods are listed under **Not in a species list**. Models in the older
+  species, and models from other mods are listed under **Not in a species list**. A clothing item
+  no species uses, on a model a species does use, is listed with that species: Anthro Survivors'
+  unused Racoon item appears under Racoon, next to Common and Spiffy, which wear the same model. Models in the older
   `.x` format don't show up.
 - **A single model works too.** Put a `.fbx` anywhere in `models`, with a `.png` of the same name
   beside it.
