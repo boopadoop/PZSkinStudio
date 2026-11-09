@@ -118,7 +118,12 @@
       <p id="paintWhat" class="muted small"></p>
       <div id="previewSlot"></div>
       <p class="muted small">Drag to turn the model, right-drag to move it, scroll to zoom.</p>
+      <label class="check" title="Draws the brush outline on the model, where it would paint"><input id="brushOnModel" type="checkbox" checked> Show the brush on the model</label>
+      <label id="paintOnModelRow" class="check" title="Press on the model to paint it, and the strokes land on the texture; press beside the model to turn it"><input id="paintOnModel" type="checkbox"> Paint on the model</label>
+      <p id="paintOnModelHint" class="muted small" hidden>Painting on the model works on one object at a time, so a messy UV map can't spread a stroke across several: close Paint and pick one object first.</p>
+      <label id="hideOthersRow" class="check" title="Hides the model's other objects while you paint this one"><input id="hideOthers" type="checkbox"> Hide the other objects</label>
       <button id="previewBig" class="block">Enlarge preview</button>
+      <label class="field" title="Bigger textures hold more detail, for detailed models. Growing keeps each painted pixel sharp; shrinking blends them. Undo takes it back">Texture size <select id="paintSize"></select></label>
       <p id="paintUnsaved" class="note warn" hidden>You have unsaved changes.</p>
       <button id="paintSave" class="primary block">Save as…</button>
       <button id="paintClose" class="block">Close paint</button>
@@ -127,16 +132,25 @@
     <section>
       <h2 id="modelName">No model</h2>
       <p id="modelGroup" class="muted"></p>
-      <div class="seg wide" role="group" aria-label="Body">
+      <p id="generalNote" class="muted small" hidden>A general 3D model: it isn't in a mod's <code>media</code> folder, so the Project Zomboid checks are off.</p>
+      <div id="viewRow" hidden>
+        <label class="field">Show and paint <select id="viewPick"></select></label>
+        <p id="viewHint" class="muted small">Or click an object in the 3D view; click it again for the whole model.</p>
+        <div id="textureRow" class="seg wide" role="group" aria-label="Textures" title="One texture shared by every object, or a texture of its own on each object">
+          <button id="tex-one">One texture</button><button id="tex-per">One per object</button>
+        </div>
+      </div>
+      <div id="bodyRow" class="seg wide" role="group" aria-label="Body">
         <button id="body-male" disabled>Male</button><button id="body-female" disabled>Female</button>
       </div>
       <p id="bodyNote" class="note"></p>
       <p id="modelStats" class="muted small"></p>
+      <div id="modelChecks"></div>
     </section>
 
     <section>
       <button id="importSkin" class="primary block">Import skin</button>
-      <p class="muted small">Or drag a .png or .skin.zip anywhere on this page.</p>
+      <p class="muted small">Takes a .png, or a .skin.zip made by Export skin, which opens on the model (and object) it was made for. Or drag either anywhere on this page.</p>
       <div id="customFields" hidden>
         <p id="colourNote" class="note warn" hidden></p>
         <label class="field">Skin name <input id="skinName" type="text" maxlength="60"></label>
@@ -154,6 +168,9 @@
       <h3>Texture <span id="textureSize" class="muted"></span></h3>
       <canvas id="texture" width="512" height="512"></canvas>
       <label class="check"><input id="showUv" type="checkbox"> Show UV lines</label>
+      <label class="check" title="Only the edges where the UV map is cut, which is easier to read on a detailed model. Also used for the UV guide and in Paint"><input id="uvOutline" type="checkbox"> Outlines only</label>
+      <label id="uvColourRow" class="check" title="Each object's UV lines in a colour of its own, here, in the UV guide and in Paint" hidden><input id="uvColour" type="checkbox"> Colour by object</label>
+      <div id="uvLegend" class="legend" hidden></div>
       <div class="buttons">
         <button id="downloadPng" disabled>Download texture</button>
         <button id="downloadGuide">Download UV guide</button>

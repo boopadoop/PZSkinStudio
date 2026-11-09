@@ -1,5 +1,5 @@
 // Paint mode: the tools, the colours, and keeping the 3D preview in step with the brush.
-import { PaintDocument } from './paintdoc.js';
+import { PaintDocument, resample } from './paintdoc.js';
 import { PaintView } from './paintview.js';
 import { encodePng } from './pngcolour.js';
 
@@ -12,6 +12,8 @@ const PALETTE = [
 ];
 const MODES = ['paint', 'erase', 'fill', 'smudge', 'pick', 'move'];
 const PANELS = ['paintColours', 'paintBox', 'paintSide'];
+// Texture sizes on offer: 16 to 2048, each twice the last.
+const SIZES = [16, 32, 64, 128, 256, 512, 1024, 2048];
 const RECENT_COLOURS = 10;
 const MAX_BRUSH = 64;
 const MAX_TOLERANCE = 128;
@@ -38,6 +40,7 @@ export class Painter {
       },
       onPick: (rgb) => { this.setColour(toHex(rgb)); this.remember(rgb); },
       onHover: () => this.updateStatus(),
+      onBrush: (brush) => this.showBrushOnModel(brush),
     });
     this.buildPalette();
     this.bindControls();
@@ -45,7 +48,7 @@ export class Painter {
   }
 
   get isOpen() { return this.doc !== null; }
-  get unsaved() { return this.doc?.unsaved ?? false; }
+  get unsaved() { return this.doc ? this.doc.unsaved || this.resized : false; }
 
   buildPalette() {
     $('palette').replaceChildren(...PALETTE.map((hex) => this.swatch(hex)));
@@ -80,6 +83,22 @@ export class Painter {
     $('previewBig').onclick = () => this.toggleBigPreview();
     $('paintClose').onclick = () => this.requestClose();
     $('paintSave').onclick = () => this.onSaveRequest();
+    $('paintSize').onchange = (event) => this.resize(Number(event.target.value));
+    $('paintOnModel').checked = localStorage.getItem('pzSkinStudio.paintOnModel') === '1';
+    $('paintOnModel').onchange = (event) => {
+      localStorage.setItem('pzSkinStudio.paintOnModel', event.target.checked ? '1' : '0');
+      this.updateModelPainting();
+    };
+    $('hideOthers').checked = localStorage.getItem('pzSkinStudio.hideOthers') === '1';
+    $('hideOthers').onchange = (event) => {
+      localStorage.setItem('pzSkinStudio.hideOthers', event.target.checked ? '1' : '0');
+      this.viewer.showGhost(!event.target.checked);
+    };
+    $('brushOnModel').checked = localStorage.getItem('pzSkinStudio.brushOnModel') !== '0';
+    $('brushOnModel').onchange = (event) => {
+      localStorage.setItem('pzSkinStudio.brushOnModel', event.target.checked ? '1' : '0');
+      this.showBrushOnModel(this.lastBrush);
+    };
     addEventListener('keydown', (event) => this.onKeyDown(event));
     addEventListener('keyup', (event) => { if (event.code === 'Space') this.view.spaceHeld = false; });
   }
@@ -167,6 +186,10 @@ export class Painter {
 
   open({ width, height, pixels, mesh, name, what }) {
     this.doc = new PaintDocument(width, height, pixels);
+    this.mesh = mesh;
+    // Earlier sizes of the texture, for Undo to go back to.
+    this.sizes = [];
+    this.resized = false;
     document.body.classList.add('painting');
     for (const id of PANELS) $(id).hidden = false;
     $('toolbar').hidden = true;
@@ -179,7 +202,92 @@ export class Painter {
     this.setSize(this.view.tool.size);
     this.viewer.setPaintPixels(pixels, width, height);
     this.view.open(this.doc, mesh);
+    this.showSize();
+    // Painting on the model is for one object at a time: with several, a messy UV map would spread a
+    // stroke over them all.
+    const parts = mesh.cornerPart ? new Set(Array.from({ length: mesh.index.length / 3 }, (_, t) => mesh.cornerPart[mesh.index[t * 3]])) : null;
+    this.oneObject = !parts || parts.size <= 1;
+    $('paintOnModel').disabled = !this.oneObject;
+    $('paintOnModelHint').hidden = this.oneObject;
+    $('hideOthersRow').hidden = !this.viewer.ghost;
+    this.viewer.showGhost(!$('hideOthers').checked);
+    this.updateModelPainting();
     this.updateButtons();
+    this.updateStatus();
+  }
+
+  // Strokes on the model go through the same brush as strokes on the texture, at the texture pixel
+  // under the pointer. Where two points in a row are far apart on the texture, the stroke has
+  // crossed a seam, so the brush lifts rather than drawing a line across the texture between them.
+  updateModelPainting() {
+    const on = this.isOpen && this.oneObject && $('paintOnModel').checked;
+    if (!on) {
+      this.viewer.setSurfacePainting(null);
+      return;
+    }
+    const texel = (hit) => ({
+      x: Math.min(this.doc.width - 1, Math.floor(hit.u * this.doc.width)),
+      y: Math.min(this.doc.height - 1, Math.floor(hit.v * this.doc.height)),
+    });
+    let last = null;
+    const near = (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) <= Math.max(4 * this.view.tool.size, this.doc.width * 0.02);
+    this.viewer.setSurfacePainting({
+      wants: () => this.isOpen && !this.view.moving && !this.view.drag,
+      start: (hit, event) => {
+        last = texel(hit);
+        this.view.startAt(last, event.altKey);
+      },
+      move: (hit) => {
+        if (!hit) {
+          last = null;
+          return;
+        }
+        const at = texel(hit);
+        this.view.dragTo(at, !!last && near(at, last));
+        last = at;
+      },
+      end: () => this.view.onPointerUp(),
+      hover: (hit) => this.view.hoverAt(hit ? texel(hit) : null),
+    });
+  }
+
+  // The paint canvas's brush outline, drawn on the model too when that's ticked.
+  showBrushOnModel(brush) {
+    this.lastBrush = brush;
+    const show = brush && this.isOpen && $('brushOnModel').checked;
+    this.viewer.setBrush(show ? brush.spots : [], brush?.round);
+  }
+
+  showSize() {
+    const { width, height } = this.doc;
+    const sizes = SIZES.includes(width) && width === height ? SIZES : [...SIZES, `${width} × ${height}`];
+    $('paintSize').replaceChildren(...sizes.map((size) => {
+      const option = document.createElement('option');
+      option.value = typeof size === 'number' ? size : '';
+      option.textContent = typeof size === 'number' ? `${size} × ${size}` : size;
+      option.selected = typeof size === 'number' ? size === width && width === height : true;
+      if (typeof size !== 'number') option.disabled = true;
+      return option;
+    }));
+  }
+
+  // A new size for the texture. The old one is kept so Undo can bring it back.
+  resize(size) {
+    if (!this.doc || !size || this.view.drag) return;
+    const { width, height, pixels } = this.doc;
+    if (size === width && size === height) return;
+    this.sizes.push({ doc: this.doc, resized: this.resized });
+    this.useDoc(new PaintDocument(size, size, resample(pixels, width, height, size, size)));
+    this.resized = true;
+    this.onResized?.(size);
+    this.updateButtons();
+  }
+
+  useDoc(doc) {
+    this.doc = doc;
+    this.viewer.setPaintPixels(doc.pixels, doc.width, doc.height);
+    this.view.open(doc, this.mesh);
+    this.showSize();
     this.updateStatus();
   }
 
@@ -196,6 +304,11 @@ export class Painter {
 
   close() {
     this.doc = null;
+    this.viewer.setSurfacePainting(null);
+    this.viewer.showGhost(true);
+    this.resized = false;
+    this.sizes = [];
+    this.viewer.setBrush([]);
     this.view.close();
     document.body.classList.remove('painting', 'bigPreview');
     for (const id of PANELS) $(id).hidden = true;
@@ -212,6 +325,7 @@ export class Painter {
 
   markSaved(name) {
     this.doc.markSaved();
+    this.resized = false;
     this.setName(name);
     this.updateButtons();
   }
@@ -228,7 +342,15 @@ export class Painter {
   }
 
   undo() {
-    if (!this.doc?.canUndo || this.view.drag) return;
+    if (!this.doc || this.view.drag) return;
+    if (!this.doc.canUndo && this.sizes.length) {
+      const before = this.sizes.pop();
+      this.useDoc(before.doc);
+      this.resized = before.resized;
+      this.updateButtons();
+      return;
+    }
+    if (!this.doc.canUndo) return;
     this.doc.undo();
     this.showChanges();
     this.updateButtons();
@@ -242,7 +364,7 @@ export class Painter {
   }
 
   updateButtons() {
-    $('paintUndo').disabled = !this.doc?.canUndo;
+    $('paintUndo').disabled = !this.doc?.canUndo && !this.sizes?.length;
     $('paintRedo').disabled = !this.doc?.canRedo;
     $('paintUnsaved').hidden = !this.unsaved;
   }
@@ -264,7 +386,7 @@ export class Painter {
   }
 
   onKeyDown(event) {
-    if (!this.isOpen || event.target.matches('input[type=text], dialog *')) return;
+    if (!this.isOpen || event.target.matches('input[type=text], select, dialog *')) return;
     const key = event.key.toLowerCase();
     const command = event.ctrlKey || event.metaKey;
     if (command && key === 'z') {

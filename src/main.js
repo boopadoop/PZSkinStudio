@@ -1,10 +1,15 @@
 import { baseName, loadLibrary, scanFolder } from './catalog.js';
-import { canPickFolder, download, listHandle, listInput, recallFolder, rememberFolder, saveFile, saveToSkins } from './folder.js';
+import {
+  HELPER, canPickFolder, download, findHelper, keepHelperAwake, listHandle, listHelper, listInput, recallFolder, rememberFolder,
+  saveFile, saveInFolder, saveToSkins,
+} from './folder.js';
 import { get, getAll, put } from './library.js';
 import { Painter } from './painter.js';
 import { colourOf, hdrToSrgb, pixelsOf } from './pngcolour.js';
 import { isPng, packSkin, pngSize, unpackSkin } from './skinfile.js';
 import { Viewer } from './viewer.js';
+import { uvOutline, viewMesh } from './fbx.js';
+import { partCss, partRgb } from './partcolour.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, className, text) => {
@@ -15,12 +20,13 @@ const el = (tag, className, text) => {
 };
 
 const TEXTURE_SIZE = 256;
+const PAINT_HISTORY = 'paint history';
 const ORIENTATIONS_KEY = 'pzSkinStudio.orientations';
 const WATCH_MS = 1000;
 const SKIN_FORMAT = 1;
 
 const state = {
-  root: null,         // the folder's handle, when the browser gives one
+  root: null,         // the folder's handle when the browser gives one, or HELPER under start-studio.py
   catalog: null,
   character: null,
   body: localStorage.getItem('pzSkinStudio.body') === 'male' ? 'male' : 'female',
@@ -29,12 +35,26 @@ const state = {
   customSkins: [],
   packSkins: new Map(),
   unmatched: [],
+  view: null,         // for a file of several objects or materials, which of its views is shown
+  perObject: false,   // a general model of several objects, with a texture of its own on each
+  partSkins: new Map(), // in that case, each object's skin, by object number
 };
+const TEXTURES_KEY = 'pzSkinStudio.textures';
+const VIEWS_KEY = 'pzSkinStudio.views';
+const meshCache = { key: null, stored: null, views: new Map() };
 let viewer = null;
 let painter = null;
 let loadToken = 0;
 
 const variantNow = () => state.character?.bodies[state.body] ?? null;
+const viewNow = () => variantNow()?.views?.find((v) => v.id === state.view) ?? null;
+const layoutNow = () => viewNow()?.layout ?? variantNow()?.layout;
+// Every view of a file reads the same UV maps, so a skin made in one fits them all.
+const fileLayouts = (variant = variantNow()) => new Set([variant?.layout, ...(variant?.views ?? []).map((v) => v.layout)]);
+// The object shown on its own, or null for the whole model.
+const partNow = () => viewNow()?.part ?? null;
+// Only a general model of several objects can have a texture per object: the game wears one.
+const canHavePerObject = (variant = variantNow()) => !!variant?.general && !!variant.views?.some((v) => v.part !== undefined);
 const safeName = (name) => name.trim().replace(/[^\p{L}\p{N} _-]+/gu, '').replace(/\s+/g, ' ') || 'skin';
 
 function toast(message, kind = '') {
@@ -94,7 +114,7 @@ async function showCatalog(catalog) {
   }
   const { characters, layouts, folderName } = catalog;
   $('rescan').hidden = false;
-  const broken = characters.flatMap((c) => Object.values(c.bodies)).filter((v) => v?.error).length;
+  const broken = new Set(characters.flatMap((c) => Object.values(c.bodies)).filter((v) => v?.error).map((v) => v.model.tail)).size;
   const count = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   $('folderStatus').textContent = `${folderName}: ${count(characters.length, 'character')}, ${count(layouts.size, 'UV layout')}`
     + (state.customSkins.length ? `, ${count(state.customSkins.length, 'saved skin')}` : '')
@@ -121,7 +141,21 @@ async function openHandle(handle) {
   }
 }
 
+// Under start-studio.py the folder is always the one the helper serves, so there's nothing to pick.
+async function openHelper() {
+  try {
+    const { name, entries } = await listHelper();
+    await loadEntries(entries, name);
+  } catch (error) {
+    toast(`Could not read the studio folder: ${error.message}`, 'error');
+  }
+}
+
 async function chooseFolder() {
+  if (state.root === HELPER) {
+    await openHelper();
+    return;
+  }
   if (!canPickFolder) {
     $('dirInput').click();
     return;
@@ -135,15 +169,23 @@ async function chooseFolder() {
 
 // Chrome and Edge can read the same folder again after a yes. Other browsers have to be shown it.
 async function rescan() {
+  if (state.root === HELPER) {
+    await openHelper();
+    return;
+  }
   const allowed = await state.root?.requestPermission({ mode: 'read' }).catch(() => 'denied');
   if (allowed === 'granted') await openHandle(state.root);
   else await chooseFolder();
 }
 
 async function start() {
-  if (canPickFolder) state.root = await recallFolder() ?? null;
+  if (await findHelper()) {
+    state.root = HELPER;
+    keepHelperAwake();
+  } else if (canPickFolder) state.root = await recallFolder() ?? null;
   const catalog = await loadLibrary();
   if (catalog) await showCatalog(catalog);
+  else if (state.root === HELPER) await openHelper();
   else $('welcome').hidden = false;
 }
 
@@ -179,8 +221,9 @@ async function packSkinsFor(layout) {
 async function skinsFor(layout) {
   const pack = await packSkinsFor(layout);
   const isOwn = (skin) => (skin.character === state.character ? 0 : 1);
+  const fits = new Set([layout, ...fileLayouts()]);
   return {
-    custom: state.customSkins.filter((s) => s.meta.uvLayout === layout),
+    custom: state.customSkins.filter((s) => fits.has(s.meta.uvLayout)),
     pack: [...pack].sort((a, b) => isOwn(a) - isOwn(b)),
   };
 }
@@ -216,13 +259,96 @@ function markActiveRow() {
 
 // ---- Choosing a model and a skin -----------------------------------------------------------
 
-async function selectCharacter(character, { body, skin } = {}) {
+async function selectCharacter(character, { body, skin, view } = {}) {
   state.character = character;
   localStorage.setItem('pzSkinStudio.character', character.id);
   if (body) state.body = body;
   if (!character.bodies[state.body]) state.body = state.body === 'male' ? 'female' : 'male';
   markActiveRow();
-  await showVariant(skin);
+  await showVariant(skin, view);
+}
+
+function savedViews() {
+  try {
+    return JSON.parse(localStorage.getItem(VIEWS_KEY)) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+// Shows one view of a file: the whole of it, what the game draws, or one object.
+async function setView(view) {
+  const variant = variantNow();
+  if (!variant?.views?.some((v) => v.id === view) || painter.isOpen) return;
+  const saved = savedViews();
+  saved[variant.model.tail] = view;
+  localStorage.setItem(VIEWS_KEY, JSON.stringify(saved));
+  // With a texture per object, each object brings its own.
+  await showVariant(state.perObject ? undefined : state.skin, view);
+}
+
+// ---- A texture per object ------------------------------------------------------------------
+
+const skinKey = (skin) => (skin.kind === 'pattern' ? 'pattern'
+  : skin.kind === 'pack' ? `pack:${skin.texture.path}` : `custom:${skin.name}|${skin.meta.uvLayout}`);
+
+function savedTextures() {
+  try {
+    return JSON.parse(localStorage.getItem(TEXTURES_KEY)) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberTextures() {
+  const saved = savedTextures();
+  const parts = {};
+  for (const [part, skin] of state.partSkins) if (skin) parts[part] = skinKey(skin);
+  saved[variantNow().model.tail] = { perObject: state.perObject, parts };
+  localStorage.setItem(TEXTURES_KEY, JSON.stringify(saved));
+}
+
+// Switches between one texture for the whole model and one per object. Going to one per object
+// starts every object on the texture it had.
+async function setTextureMode(perObject) {
+  if (painter.isOpen || perObject === state.perObject || !canHavePerObject()) return;
+  if (perObject && !state.partSkins.size && state.skin) {
+    for (const view of variantNow().views) if (view.part !== undefined) state.partSkins.set(view.part, state.skin);
+  }
+  state.perObject = perObject;
+  rememberTextures();
+  await showVariant(perObject ? undefined : state.partSkins.get(partNow()) ?? state.skin, state.view);
+}
+
+// Pictures of skins, made again when a skin's picture changes (saved over, or reloaded from disk).
+const bitmaps = new WeakMap();
+async function bitmapOf(skin) {
+  const cached = bitmaps.get(skin);
+  if (cached && cached.png === skin.png) return cached.image;
+  const image = createImageBitmap(new Blob([await skinBytes(skin)], { type: 'image/png' }), {
+    premultiplyAlpha: 'none', colorSpaceConversion: 'none',
+  });
+  bitmaps.set(skin, { png: skin.png, image });
+  return image;
+}
+
+// The whole model with each object wearing its own texture.
+async function showPartSkins(token) {
+  state.skin = null;
+  watch(null);
+  const images = [];
+  for (const [part, skin] of state.partSkins) if (skin) images[part] = await bitmapOf(skin);
+  if (token !== loadToken) return;
+  viewer.setPartSkins(images, state.mesh.cornerPart);
+  drawTexture(null);
+  renderSkinPanel();
+}
+
+// Clicking an object in the 3D view shows it on its own; clicking it again shows the whole file.
+function pickPart(corner) {
+  const part = state.mesh?.cornerPart?.[corner];
+  if (part === undefined || !variantNow()?.views?.some((v) => v.id === `part:${part}`)) return;
+  setView(state.view === `part:${part}` ? 'whole' : `part:${part}`);
 }
 
 async function setBody(body) {
@@ -232,10 +358,21 @@ async function setBody(body) {
 }
 
 async function loadMesh(variant) {
-  const mesh = await get('meshes', variant.meshKey);
-  if (!mesh) throw new Error('its saved copy is missing, so click Rescan');
-  return mesh;
+  if (meshCache.key !== variant.meshKey) {
+    const stored = await get('meshes', variant.meshKey);
+    if (!stored) throw new Error('its saved copy is missing, so click Rescan');
+    // Libraries saved before outlines existed.
+    if (!stored.whole) stored.outline ??= uvOutline(stored.uv, stored.edges);
+    Object.assign(meshCache, { key: variant.meshKey, stored, views: new Map() });
+  }
+  const { stored, views } = meshCache;
+  if (!stored.whole) return stored;
+  if (!views.has(state.view)) views.set(state.view, viewMesh(stored, state.view));
+  return views.get(state.view);
 }
+
+// The UV lines to draw: every polygon edge, or only where the UV map is cut.
+const uvEdges = () => ($('uvOutline').checked ? state.mesh.outline : state.mesh.edges);
 
 function savedOrientations() {
   try {
@@ -265,9 +402,17 @@ function resetOrientation() {
   rememberOrientation();
 }
 
-async function showVariant(skin) {
+async function showVariant(skin, view) {
   const token = ++loadToken;
   const variant = variantNow();
+  const known = (id) => (variant.views?.some((v) => v.id === id) ? id : null);
+  state.view = variant.views?.length
+    ? known(view) ?? known(savedViews()[variant.model.tail]) ?? known(variant.defaultView) ?? variant.views[0].id
+    : null;
+  const textures = savedTextures()[variant.model.tail];
+  const sameModel = meshCache.key === variant.meshKey;
+  state.perObject = canHavePerObject(variant) && !!textures?.perObject;
+  if (!sameModel) state.partSkins = new Map();
   renderModelPanel(variant);
   if (variant.error) {
     toast(`This model can't be shown: ${variant.error}`, 'error');
@@ -284,24 +429,75 @@ async function showVariant(skin) {
     if (token === loadToken) toast(`This model can't be shown: ${error.message}`, 'error');
     return;
   }
-  const { pack, custom } = await skinsFor(variant.layout);
+  const { pack, custom } = await skinsFor(layoutNow());
   if (token !== loadToken) return;
   const own = pack.find((s) => s.variant === variant)
     ?? pack.find((s) => s.character === state.character)
     ?? pack[0] ?? null;
-  // Keep a skin the user is working on when they switch to a model that can wear it.
-  const keep = state.skin?.meta?.uvLayout === variant.layout ? state.skin : null;
+  // Keep a skin the user is working on when they switch to a model, or a view, that can wear it.
+  const keep = fileLayouts(variant).has(state.skin?.meta?.uvLayout) || state.skin?.kind === 'pattern'
+    || (state.skin?.kind === 'pack' && state.skin.variant.model.tail === variant.model.tail) ? state.skin : null;
+  if (state.perObject) {
+    if (!state.partSkins.size) {
+      // Each object's skin from last time, found again by name.
+      const all = [...pack, ...custom, patternSkin()];
+      for (const [part, key] of Object.entries(textures?.parts ?? {})) {
+        const found = all.find((s) => skinKey(s) === key);
+        if (found) state.partSkins.set(Number(part), found);
+      }
+    }
+    renderSkinList(pack, custom);
+    if (partNow() === null) await showPartSkins(token);
+    else await selectSkin(skin ?? state.partSkins.get(partNow()) ?? null, token);
+    return;
+  }
   await selectSkin(skin ?? keep ?? own, token);
   renderSkinList(pack, custom);
 }
 
+// A grid of labelled squares that fits any model. Squares that come out stretched show a stretched
+// UV map, letters that read backwards show a mirrored part, and the same label in two places shows
+// parts lying on top of each other.
+let testPattern = null;
+function patternSkin() {
+  if (testPattern) return testPattern;
+  const size = 512;
+  const cells = 8;
+  const cell = size / cells;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `bold ${Math.round(cell * 0.4)}px sans-serif`;
+  for (let row = 0; row < cells; row++) {
+    for (let col = 0; col < cells; col++) {
+      const light = (row + col) % 2 ? 66 : 42;
+      ctx.fillStyle = `hsl(${Math.round((col / cells) * 360)} 60% ${light}%)`;
+      ctx.fillRect(col * cell, row * cell, cell, cell);
+      ctx.strokeStyle = 'rgba(0,0,0,.55)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(col * cell + 1, row * cell + 1, cell - 2, cell - 2);
+      ctx.fillStyle = light > 50 ? '#111' : '#fff';
+      ctx.fillText(`${'ABCDEFGH'[col]}${row + 1}`, col * cell + cell / 2, row * cell + cell / 2);
+    }
+  }
+  const data = atob(canvas.toDataURL('image/png').split(',')[1]);
+  testPattern = { kind: 'pattern', name: 'Test pattern', group: 'Studio', png: Uint8Array.from(data, (c) => c.charCodeAt(0)) };
+  return testPattern;
+}
+
 const skinBytes = async (skin) => {
-  if (skin.kind === 'custom') return skin.png;
+  if (skin.kind === 'custom' || skin.kind === 'pattern') return skin.png;
   return skin.texture.read();
 };
 
 async function selectSkin(skin, token = ++loadToken) {
   state.skin = skin;
+  if (state.perObject && partNow() !== null && skin) {
+    state.partSkins.set(partNow(), skin);
+    rememberTextures();
+  }
   watch(skin);
   let image = null;
   if (skin) {
@@ -321,18 +517,42 @@ function renderModelPanel(variant) {
   const c = state.character;
   $('modelName').textContent = c.display;
   $('modelGroup').textContent = `${c.group} · ${c.pack.name ?? c.pack.id}`;
-  $('modelStats').textContent = variant.layout
-    ? `${variant.verts} vertices · ${variant.polys} polygons · layout ${variant.layout.slice(0, 8)}`
+  const shown = viewNow() ?? variant;
+  $('modelStats').textContent = shown.layout
+    ? `${shown.verts} vertices · ${shown.polys} polygons · layout ${shown.layout.slice(0, 8)}`
     : '';
+  const views = variant.views ?? [];
+  $('viewRow').hidden = !views.length;
+  $('viewPick').replaceChildren(...views.map((v) => {
+    const option = el('option', '', v.label);
+    option.value = v.id;
+    option.selected = v.id === state.view;
+    return option;
+  }));
+  $('viewHint').hidden = !views.some((v) => v.part !== undefined);
+  $('generalNote').hidden = !variant.general;
+  // A general model is one file, whatever the body, so Male and Female mean nothing for it.
+  $('bodyRow').hidden = !!variant.general;
   for (const body of ['male', 'female']) {
     const button = $(`body-${body}`);
     button.disabled = !c.bodies[body];
     button.classList.toggle('active', body === state.body);
   }
-  $('paintOpen').disabled = !!variant.error;
+  const perObjectWhole = state.perObject && partNow() === null;
+  $('paintOpen').disabled = !!variant.error || perObjectWhole;
+  $('paintOpen').title = perObjectWhole ? 'Each object has its own texture: pick one to paint it' : '';
+  $('textureRow').hidden = !canHavePerObject(variant);
+  $('tex-one').classList.toggle('active', !state.perObject);
+  $('tex-per').classList.toggle('active', state.perObject);
+  const checks = variant.error
+    ? [{ level: 'warn', text: `This model can't be shown: ${variant.error}.` }]
+    : shown.checks ?? variant.checks ?? [];
+  $('modelChecks').replaceChildren(...checks.map((c) => el('p', c.level === 'warn' ? 'note warn' : 'note', c.text)));
   const { male, female } = c.bodies;
   const note = $('bodyNote');
-  if (male && female && male.layout !== female.layout) {
+  if (variant.general) {
+    note.textContent = '';
+  } else if (male && female && male.layout !== female.layout) {
     note.textContent = 'Male and female have different UV layouts here. A skin only fits the body it was painted for.';
     note.className = 'note warn';
   } else if (male && female) {
@@ -360,7 +580,9 @@ function skinTile(skin) {
   image.draggable = false;
   thumbnailUrl(skin).then((url) => { image.src = url; });
   tile.append(image, el('span', '', skin.name));
-  tile.title = skin.kind === 'custom' ? `${skin.name}${skin.meta.author ? ` by ${skin.meta.author}` : ''}` : `${skin.name} (${skin.group})`;
+  tile.title = skin.kind === 'pattern'
+    ? 'Labelled squares to check the UV map: stretched squares mean stretching, backwards letters a mirrored part, and the same label twice two parts on top of each other'
+    : skin.kind === 'custom' ? `${skin.name}${skin.meta.author ? ` by ${skin.meta.author}` : ''}` : `${skin.name} (${skin.group})`;
   tile.onclick = () => selectSkin(skin);
   return tile;
 }
@@ -368,20 +590,30 @@ function skinTile(skin) {
 function renderSkinList(pack, custom) {
   const box = $('skins');
   box.replaceChildren();
+  if (state.perObject && partNow() === null) {
+    box.append(el('h3', '', 'Textures'), el('p', 'muted small', 'Each object has a texture of its own. Pick an object above, or click it in the 3D view, to choose its skin or paint it.'));
+    return;
+  }
   if (custom.length) {
     box.append(el('h3', '', 'Your skins'));
     const grid = el('div', 'grid');
     grid.append(...custom.map(skinTile));
     box.append(grid);
   }
-  box.append(el('h3', '', pack.length === 1 ? 'From the pack' : `From the pack (${pack.length} fit this model)`));
-  const grid = el('div', 'grid');
-  grid.append(...pack.map(skinTile));
-  box.append(grid);
+  if (pack.length) {
+    box.append(el('h3', '', pack.length === 1 ? 'From the pack' : `From the pack (${pack.length} fit this model)`));
+    const grid = el('div', 'grid');
+    grid.append(...pack.map(skinTile));
+    box.append(grid);
+  }
+  box.append(el('h3', '', 'Check the UV map'));
+  const tools = el('div', 'grid');
+  tools.append(skinTile(patternSkin()));
+  box.append(tools);
 }
 
 async function refreshSkinList() {
-  const { pack, custom } = await skinsFor(variantNow().layout);
+  const { pack, custom } = await skinsFor(layoutNow());
   renderSkinList(pack, custom);
 }
 
@@ -404,18 +636,53 @@ function renderSkinPanel() {
 
 let shownImage = null;
 
+// The objects whose faces are shown, by number, for a model of several.
+function partsShown(mesh = state.mesh) {
+  if (!mesh?.cornerPart) return new Set();
+  mesh.partsShown ??= new Set(Array.from({ length: mesh.index.length / 3 }, (_, t) => mesh.cornerPart[mesh.index[t * 3]]));
+  return mesh.partsShown;
+}
+
+// Colour the UV lines by object: ticked, and more than one object shown.
+const colouring = () => $('uvColour').checked && partsShown().size > 1;
+
 function drawUvLines(ctx, size, color, width) {
-  const { uv, edges } = state.mesh;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = width;
-  ctx.beginPath();
+  const { uv, cornerPart } = state.mesh;
+  const edges = uvEdges();
+  const groups = new Map();
   for (let i = 0; i < edges.length; i += 2) {
-    const a = edges[i] * 2;
-    const b = edges[i + 1] * 2;
-    ctx.moveTo(uv[a] * size, uv[a + 1] * size);
-    ctx.lineTo(uv[b] * size, uv[b + 1] * size);
+    const key = colouring() ? cornerPart[edges[i]] : -1;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(edges[i] * 2, edges[i + 1] * 2);
   }
-  ctx.stroke();
+  ctx.lineWidth = width;
+  for (const [part, ends] of groups) {
+    ctx.strokeStyle = part < 0 ? color : partCss(part, 0.95);
+    ctx.beginPath();
+    for (let i = 0; i < ends.length; i += 2) {
+      ctx.moveTo(uv[ends[i]] * size, uv[ends[i] + 1] * size);
+      ctx.lineTo(uv[ends[i + 1]] * size, uv[ends[i + 1] + 1] * size);
+    }
+    ctx.stroke();
+  }
+}
+
+// Which colour is which object, as buttons that pick it.
+function renderLegend() {
+  const legend = $('uvLegend');
+  const shown = colouring() && $('showUv').checked;
+  legend.hidden = !shown;
+  if (!shown) return;
+  const views = variantNow().views ?? [];
+  legend.replaceChildren(...[...partsShown()].sort((a, b) => a - b).map((part) => {
+    const button = el('button', '');
+    const swatch = el('i');
+    swatch.style.background = partCss(part);
+    button.append(swatch, views.find((v) => v.part === part)?.label ?? `Object ${part + 1}`);
+    button.title = 'Show and paint just this object';
+    button.onclick = () => setView(`part:${part}`);
+    return button;
+  }));
 }
 
 function drawTexture(image = shownImage) {
@@ -427,6 +694,8 @@ function drawTexture(image = shownImage) {
   ctx.imageSmoothingEnabled = false;
   if (image) ctx.drawImage(image, 0, 0, size, size);
   if ($('showUv').checked && state.mesh) drawUvLines(ctx, size, 'rgba(255,255,255,.75)', 1);
+  $('uvColourRow').hidden = partsShown().size < 2;
+  renderLegend();
   $('textureSize').textContent = image ? `${image.width} × ${image.height}` : '';
 }
 
@@ -458,14 +727,18 @@ function uvGuide() {
   const width = shownImage?.width ?? TEXTURE_SIZE;
   const height = shownImage?.height ?? TEXTURE_SIZE;
   const image = new ImageData(width, height);
+  let colour = [255, 255, 255];
   const plot = (x, y) => {
     if (x < 0 || y < 0 || x >= width || y >= height) return;
-    image.data.fill(255, (y * width + x) * 4, (y * width + x) * 4 + 4);
+    image.data.set([...colour, 255], (y * width + x) * 4);
   };
-  const { uv, edges } = state.mesh;
+  const { uv, cornerPart } = state.mesh;
+  const edges = uvEdges();
+  const coloured = colouring();
   const pixelX = (corner) => Math.floor(uv[corner * 2] * width);
   const pixelY = (corner) => Math.floor(uv[corner * 2 + 1] * height);
   for (let i = 0; i < edges.length; i += 2) {
+    if (coloured) colour = partRgb(cornerPart[edges[i]]);
     plotLine(pixelX(edges[i]), pixelY(edges[i]), pixelX(edges[i + 1]), pixelY(edges[i + 1]), plot);
   }
   const canvas = document.createElement('canvas');
@@ -508,12 +781,14 @@ async function fixColours(png) {
 }
 
 function metaFor(name, author, variant = variantNow(), character = state.character) {
-  const fitting = Object.values(character.bodies).filter((v) => v?.layout === variant.layout);
+  const layout = layoutNow();
+  const fitting = Object.values(character.bodies).filter((v) => v && fileLayouts(v).has(layout));
   return {
     format: SKIN_FORMAT,
     name,
     author,
-    uvLayout: variant.layout,
+    uvLayout: layout,
+    ...(state.view ? { view: state.view, viewName: viewNow()?.label } : {}),
     pack: variant.pack?.id ?? character.pack.id,
     character: character.id,
     characterName: character.display,
@@ -527,17 +802,20 @@ function metaFor(name, author, variant = variantNow(), character = state.charact
   };
 }
 
+// The model (and view) a skin was made for, by its layout.
 function findBase(meta) {
   const matches = state.catalog.layouts.get(meta.uvLayout);
   if (!matches) return null;
-  return matches.find((m) => m.character.id === meta.character && m.variant.body === meta.body)
+  const base = matches.find((m) => m.character.id === meta.character && m.variant.body === meta.body)
     ?? matches.find((m) => m.character.id === meta.character)
     ?? matches[0];
+  const view = base.variant.views?.some((v) => v.id === meta.view) ? meta.view : base.view;
+  return { ...base, view };
 }
 
 async function addSkinFromZip(bytes, fileName, extra = {}) {
   const { meta, png: original } = unpackSkin(bytes);
-  const name = meta.name || fileName.replace(/\.skin\.zip$|\.zip$/i, '');
+  const name = meta.name || baseName(fileName).replace(/\.skin\.zip$|\.zip$/i, '');
   if (!findBase(meta)) {
     state.unmatched.push(`${name} (${meta.characterName ?? meta.model ?? 'unknown model'})`);
     return null;
@@ -567,7 +845,7 @@ async function importZip(bytes, fileName) {
   skin.savedAs = saved;
   await put('skins', saved ?? zipName, { name: saved ?? zipName, bytes: fixedZip });
   const base = findBase(skin.meta);
-  await selectCharacter(base.character, { body: base.variant.body, skin });
+  await selectCharacter(base.character, { body: base.variant.body, skin, view: base.view });
   if (skin.colourNote) toast(`${skin.name} had the wrong colour format, so its colours were fixed. See the note beside it.`, 'warn');
   else {
     toast(saved
@@ -584,9 +862,8 @@ function sizeWarning({ width, height }) {
 
 async function importPng(original, fileName, handle) {
   const name = fileName.replace(/\.png$/i, '');
-  const variant = variantNow();
   const { png: bytes, colourNote } = await fixColours(original);
-  let skin = state.customSkins.find((s) => s.name === name && s.meta.uvLayout === variant.layout);
+  let skin = state.customSkins.find((s) => s.name === name && s.meta.uvLayout === layoutNow());
   if (skin) {
     skin.png = bytes;
     skin.colourNote = colourNote;
@@ -596,7 +873,7 @@ async function importPng(original, fileName, handle) {
     skin = { kind: 'custom', name, meta: metaFor(name, ''), png: bytes, colourNote, handle };
     state.customSkins.unshift(skin);
   }
-  await showVariant(skin);
+  await showVariant(skin, state.view);
   const warning = sizeWarning(pngSize(bytes));
   if (warning) toast(warning, 'error');
   else if (colourNote) toast(`${name} had the wrong colour format, so its colours were fixed. See the note beside it.`, 'warn');
@@ -685,8 +962,24 @@ async function texturePixels(png) {
   }
 }
 
-function blankTexture() {
-  return { width: TEXTURE_SIZE, height: TEXTURE_SIZE, pixels: new Uint8ClampedArray(TEXTURE_SIZE * TEXTURE_SIZE * 4).fill(255) };
+// A blank texture comes at the size last chosen in Paint for this model, or 256.
+const PAINT_SIZES_KEY = 'pzSkinStudio.paintSizes';
+function paintSizes() {
+  try {
+    return JSON.parse(localStorage.getItem(PAINT_SIZES_KEY)) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberPaintSize(size) {
+  const sizes = paintSizes();
+  sizes[variantNow().model.tail] = size;
+  localStorage.setItem(PAINT_SIZES_KEY, JSON.stringify(sizes));
+}
+
+function blankTexture(size = paintSizes()[variantNow()?.model.tail] ?? TEXTURE_SIZE) {
+  return { width: size, height: size, pixels: new Uint8ClampedArray(size * size * 4).fill(255) };
 }
 
 async function openPaint() {
@@ -696,9 +989,11 @@ async function openPaint() {
   watch(null);
   painter.open({
     ...texture,
-    mesh: state.mesh,
-    name: skin?.name ?? character.display,
-    what: `${character.display}, ${state.body} body`,
+    mesh: { ...state.mesh, edges: uvEdges(), colourParts: colouring() ? state.mesh.cornerPart : null },
+    name: skin?.name ?? (partNow() !== null ? `${character.display} ${viewNow().label}` : character.display),
+    what: variantNow().general
+      ? `${character.display}${viewNow() ? `, ${viewNow().label}` : ''}`
+      : `${character.display}, ${state.body} body${viewNow() ? `, ${viewNow().label}` : ''}`,
   });
 }
 
@@ -713,15 +1008,27 @@ function askSaveName() {
   $('saveName').select();
 }
 
+// Paintings go in the studio folder's paint history/, each save kept beside the last. A browser that
+// can't write there (Firefox opened from the file, or a folder Chrome wasn't allowed to change)
+// gets the usual save window or download instead.
 async function savePainting(name) {
   const png = painter.png();
+  const fileName = `${safeName(name)}.png`;
+  let savedAs = null;
   try {
-    await saveFile(png, `${safeName(name)}.png`, { type: 'image/png', description: 'PNG image' });
+    if (state.root) savedAs = await saveInFolder(state.root, PAINT_HISTORY, fileName, png);
   } catch (error) {
-    if (error.name !== 'AbortError') toast(`Could not save: ${error.message}`, 'error');
-    return;
+    toast(`Could not save in ${PAINT_HISTORY}: ${error.message}`, 'error');
   }
-  const { layout } = variantNow();
+  if (!savedAs) {
+    try {
+      await saveFile(png, fileName, { type: 'image/png', description: 'PNG image' });
+    } catch (error) {
+      if (error.name !== 'AbortError') toast(`Could not save: ${error.message}`, 'error');
+      return;
+    }
+  }
+  const layout = layoutNow();
   let skin = state.customSkins.find((s) => s.name === name && s.meta.uvLayout === layout);
   if (skin) {
     skin.png = png;
@@ -735,8 +1042,15 @@ async function savePainting(name) {
   skin.savedAs ??= `${safeName(name)}.skin.zip`;
   await put('skins', skin.savedAs, { name: skin.savedAs, bytes: packSkin(skin.meta, png) });
   state.skin = skin;
+  if (state.perObject && partNow() !== null) {
+    state.partSkins.set(partNow(), skin);
+    rememberTextures();
+  }
   painter.markSaved(name);
-  toast(`Saved ${safeName(name)}.png, and added it to Your skins.`);
+  if (savedAs) toast(`Saved ${PAINT_HISTORY}/${savedAs}, and added it to Your skins.`);
+  else if (!('showSaveFilePicker' in window)) {
+    toast(`Saved ${fileName} to your downloads, and added it to Your skins. To save paintings in the studio's ${PAINT_HISTORY} folder instead, start the studio with the PZ Skin Studio program, or start-studio.py.`, 'warn');
+  } else toast(`Saved ${fileName}, and added it to Your skins.`);
 }
 
 async function exportSkin() {
@@ -752,7 +1066,7 @@ async function exportSkin() {
   const bytes = packSkin(skin.meta, skin.png);
   const fileName = `${safeName(name)}.skin.zip`;
   try {
-    const startIn = await state.root?.getDirectoryHandle('skins').catch(() => null);
+    const startIn = await state.root?.getDirectoryHandle?.('skins').catch(() => null);
     await saveFile(bytes, fileName, { type: 'application/zip', description: 'Skin', startIn });
   } catch (error) {
     if (error.name !== 'AbortError') toast(`Could not save: ${error.message}`, 'error');
@@ -779,7 +1093,9 @@ function downloadGuide() {
 
 function init() {
   viewer = new Viewer($('view'));
+  viewer.onPick = (corner) => { if (!painter.isOpen) pickPart(corner); };
   painter = new Painter(viewer, { onClosed: afterPaint, onSaveRequest: askSaveName });
+  painter.onResized = rememberPaintSize;
   $('paintOpen').onclick = openPaint;
   $('saveDialog').addEventListener('close', () => {
     const name = $('saveName').value.trim();
@@ -801,6 +1117,9 @@ function init() {
     event.target.value = '';
   };
   $('search').oninput = renderList;
+  $('viewPick').onchange = (event) => setView(event.target.value);
+  $('tex-one').onclick = () => setTextureMode(false);
+  $('tex-per').onclick = () => setTextureMode(true);
   $('body-male').onclick = () => setBody('male');
   $('body-female').onclick = () => setBody('female');
   $('importSkin').onclick = chooseImport;
@@ -808,6 +1127,18 @@ function init() {
   $('downloadPng').onclick = downloadPng;
   $('downloadGuide').onclick = downloadGuide;
   $('showUv').onchange = () => drawTexture();
+  $('uvColour').checked = localStorage.getItem('pzSkinStudio.uvColour') === '1';
+  $('uvColour').onchange = (event) => {
+    localStorage.setItem('pzSkinStudio.uvColour', event.target.checked ? '1' : '0');
+    if (event.target.checked) $('showUv').checked = true;
+    drawTexture();
+  };
+  $('uvOutline').checked = localStorage.getItem('pzSkinStudio.uvOutline') === '1';
+  $('uvOutline').onchange = (event) => {
+    localStorage.setItem('pzSkinStudio.uvOutline', event.target.checked ? '1' : '0');
+    if (event.target.checked) $('showUv').checked = true;
+    drawTexture();
+  };
   for (const name of ['front', 'back', 'left', 'right']) $(`view-${name}`).onclick = () => viewer.view(name);
   for (const axis of ['x', 'y', 'z']) $(`turn-${axis}`).onclick = () => turnModel(axis);
   $('turn-reset').onclick = resetOrientation;
@@ -842,5 +1173,5 @@ function init() {
   start();
 }
 
-window.skinStudio = { state, get viewer() { return viewer; }, get painter() { return painter; }, importFile, selectCharacter, setBody, selectSkin, openHandle, uvGuide };
+window.skinStudio = { state, get viewer() { return viewer; }, get painter() { return painter; }, importFile, selectCharacter, setBody, setView, selectSkin, openHandle, uvGuide };
 init();

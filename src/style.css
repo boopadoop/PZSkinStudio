@@ -34,7 +34,7 @@ button:disabled { opacity: .45; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #231304; font-weight: 600; }
 button.primary:hover:not(:disabled) { background: #f2a764; }
 button.block { display: block; width: 100%; }
-:is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+:is(button, input, select):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .buttons { display: flex; gap: 6px; flex-wrap: wrap; }
 .buttons.center { justify-content: center; }
 .seg { display: inline-flex; }
@@ -45,13 +45,18 @@ button.block { display: block; width: 100%; }
 .seg.wide { display: flex; margin-top: 8px; }
 .seg.wide button { flex: 1; }
 
-input[type=search], input[type=text] {
+input[type=search], input[type=text], select {
   width: 100%; background: #15161a; color: var(--text); border: 1px solid var(--line);
   border-radius: 5px; padding: 6px 8px; font: inherit;
 }
 .field { display: block; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
-.field input { margin-top: 3px; font-size: 14px; }
+.field :is(input, select) { margin-top: 3px; font-size: 14px; }
+#viewRow { margin-top: 8px; }
+#viewRow .field { margin-bottom: 2px; }
 .check { display: block; margin: 6px 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 8px; }
+.legend button { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; font-size: 12px; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 
 #list { flex: 1; overflow-y: auto; min-height: 0; margin: 0 -4px; }
 .group {

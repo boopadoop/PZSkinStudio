@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#363a44"/><stop offset="1" stop-color="#1e2026"/></linearGradient></defs>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+  <g transform="translate(128 120) rotate(-10) translate(-70 -70)"><rect x="0" y="0" width="32" height="32" rx="5" fill="hsl(0 62% 46%)"/><rect x="36" y="0" width="32" height="32" rx="5" fill="hsl(90 62% 64%)"/><rect x="72" y="0" width="32" height="32" rx="5" fill="hsl(185 62% 46%)"/><rect x="108" y="0" width="32" height="32" rx="5" fill="hsl(265 62% 64%)"/><rect x="0" y="36" width="32" height="32" rx="5" fill="hsl(45 62% 64%)"/><rect x="36" y="36" width="32" height="32" rx="5" fill="hsl(140 62% 46%)"/><rect x="72" y="36" width="32" height="32" rx="5" fill="hsl(220 62% 64%)"/><rect x="108" y="36" width="32" height="32" rx="5" fill="hsl(310 62% 46%)"/><rect x="0" y="72" width="32" height="32" rx="5" fill="hsl(90 62% 46%)"/><rect x="36" y="72" width="32" height="32" rx="5" fill="hsl(185 62% 64%)"/><rect x="72" y="72" width="32" height="32" rx="5" fill="hsl(265 62% 46%)"/><rect x="108" y="72" width="32" height="32" rx="5" fill="hsl(0 62% 64%)"/><rect x="0" y="108" width="32" height="32" rx="5" fill="hsl(140 62% 64%)"/><rect x="36" y="108" width="32" height="32" rx="5" fill="hsl(220 62% 46%)"/><rect x="72" y="108" width="32" height="32" rx="5" fill="hsl(310 62% 64%)"/><rect x="108" y="108" width="32" height="32" rx="5" fill="hsl(45 62% 46%)"/></g>
+  <g transform="translate(178 174) rotate(-45)">
+    <rect x="-10" y="2" width="20" height="78" rx="10" fill="#e8944a" stroke="#1e2026" stroke-width="6"/>
+    <path d="M-13 4 h26 l-6 -28 q-7 -16 -14 0 z" fill="#f4f1ea" stroke="#1e2026" stroke-width="6" stroke-linejoin="round"/>
+  </g>
+</svg>

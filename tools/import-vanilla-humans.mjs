@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { doubles, fbxFile, int32, int64, ints, node, string } from './fbxwrite.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const media = process.argv[2];
@@ -85,61 +86,6 @@ function outwardCorners({ vertices, normals }, face) {
   return outward ? [0, 1, 2] : [0, 2, 1];
 }
 
-// ---- Binary FBX ------------------------------------------------------------------------------
-
-const utf8 = (text) => Buffer.from(text, 'latin1');
-const int32 = (value) => { const b = Buffer.alloc(5); b[0] = 0x49; b.writeInt32LE(value, 1); return b; };
-const int64 = (value) => { const b = Buffer.alloc(9); b[0] = 0x4c; b.writeBigInt64LE(BigInt(value), 1); return b; };
-const double = (value) => { const b = Buffer.alloc(9); b[0] = 0x44; b.writeDoubleLE(value, 1); return b; };
-const string = (text) => {
-  const body = utf8(text);
-  const b = Buffer.alloc(5);
-  b[0] = 0x53;
-  b.writeUInt32LE(body.length, 1);
-  return Buffer.concat([b, body]);
-};
-function array(kind, values, size, write) {
-  const head = Buffer.alloc(13);
-  head[0] = kind.charCodeAt(0);
-  head.writeUInt32LE(values.length, 1);
-  head.writeUInt32LE(0, 5);
-  head.writeUInt32LE(values.length * size, 9);
-  const body = Buffer.alloc(values.length * size);
-  values.forEach((value, i) => write.call(body, value, i * size));
-  return Buffer.concat([head, body]);
-}
-const doubles = (values) => array('d', values, 8, Buffer.prototype.writeDoubleLE);
-const ints = (values) => array('i', values, 4, Buffer.prototype.writeInt32LE);
-
-const NULL_RECORD = Buffer.alloc(13);
-
-function node(name, props = [], children = []) {
-  return { name, props, children };
-}
-
-function encode(item, offset) {
-  const props = Buffer.concat(item.props);
-  const head = 13 + item.name.length;
-  let at = offset + head + props.length;
-  const parts = [];
-  for (const childNode of item.children) {
-    const bytes = encode(childNode, at);
-    parts.push(bytes);
-    at += bytes.length;
-  }
-  if (item.children.length) {
-    parts.push(NULL_RECORD);
-    at += NULL_RECORD.length;
-  }
-  const record = Buffer.alloc(head);
-  record.writeUInt32LE(at, 0);
-  record.writeUInt32LE(item.props.length, 4);
-  record.writeUInt32LE(props.length, 8);
-  record[12] = item.name.length;
-  record.write(item.name, 13, 'latin1');
-  return Buffer.concat([record, props, ...parts]);
-}
-
 function writeFbx(file, mesh) {
   const positionIndex = [];
   const normals = [];
@@ -189,6 +135,8 @@ function writeFbx(file, mesh) {
     node('FBXHeaderExtension', [], [
       node('FBXHeaderVersion', [int32(1003)]),
       node('FBXVersion', [int32(7400)]),
+      // Tells the studio's model check these have no bones on purpose.
+      node('Creator', [string('PZ Skin Studio preview copy, no bones')]),
     ]),
     node('Objects', [], [geometry, model]),
     node('Connections', [], [
@@ -196,19 +144,8 @@ function writeFbx(file, mesh) {
       node('C', [string('OO'), int64(modelId), int64(0)]),
     ]),
   ];
-  const header = Buffer.alloc(27);
-  header.write('Kaydara FBX Binary  \0\x1a\0', 0, 'latin1');
-  header.writeUInt32LE(7400, 23);
-  let offset = 27;
-  const parts = [header];
-  for (const item of top) {
-    const bytes = encode(item, offset);
-    parts.push(bytes);
-    offset += bytes.length;
-  }
-  parts.push(NULL_RECORD);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, Buffer.concat(parts));
+  fs.writeFileSync(file, fbxFile(top));
 }
 
 // ---- The pack --------------------------------------------------------------------------------

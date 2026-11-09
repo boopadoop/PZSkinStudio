@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "node tools/build.mjs",
-    "test": "node tools/test.mjs && node tools/test-paint.mjs && node tools/test-firefox.mjs"
+    "test": "node tools/test.mjs && node tools/test-paint.mjs && node tools/test-firefox.mjs && node tools/test-models.mjs && node tools/test-save.mjs && node tools/test-launcher.mjs",
+    "build:launcher": "sh tools/build-launcher.sh"
   },
   "dependencies": {
     "fflate": "^0.8.3",

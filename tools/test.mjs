@@ -137,7 +137,8 @@ const shown = () => page.evaluate(() => {
     body: state.body,
     skin: state.skin?.name,
     kind: state.skin?.kind,
-    tiles: [...document.querySelectorAll('#skins .tile span')].map((n) => n.textContent),
+    // The test pattern sits apart from the skins, on every model.
+    tiles: [...document.querySelectorAll('#skins .tile')].filter((t) => t.skin?.kind !== 'pattern').map((t) => t.querySelector('span').textContent),
     note: document.getElementById('bodyNote').textContent,
   };
 });

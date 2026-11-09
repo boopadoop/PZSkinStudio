@@ -350,6 +350,8 @@ check(!await page.$eval('#paintOpen', (b) => b.disabled), 'Paint is ready once a
 const previewBefore = await hashOf('#canvasBox');
 await page.click('#paintOpen');
 await page.waitForFunction(() => window.skinStudio.painter.isOpen);
+// These tests compare pictures of the 3D preview, so the brush outline on it would get in the way.
+await page.$eval('#brushOnModel', (box) => { if (box.checked) box.click(); });
 await wait(300);
 
 const layout = await page.evaluate(() => {

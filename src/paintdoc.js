@@ -43,6 +43,37 @@ export function footprints(cx, cy, size, width, height, mirrorX, mirrorY) {
   return out;
 }
 
+// A texture at a new size. Growing repeats each pixel, so painted pixels stay sharp; shrinking
+// averages the pixels each new one covers, weighted by alpha so see-through ones don't darken it.
+export function resample(pixels, width, height, newWidth, newHeight) {
+  const out = new Uint8ClampedArray(newWidth * newHeight * 4);
+  for (let y = 0; y < newHeight; y++) {
+    const top = Math.floor((y * height) / newHeight);
+    const bottom = Math.max(top + 1, Math.floor(((y + 1) * height) / newHeight));
+    for (let x = 0; x < newWidth; x++) {
+      const left = Math.floor((x * width) / newWidth);
+      const right = Math.max(left + 1, Math.floor(((x + 1) * width) / newWidth));
+      let r = 0, g = 0, b = 0, a = 0, n = 0;
+      for (let sy = top; sy < bottom; sy++) {
+        for (let sx = left; sx < right; sx++) {
+          const i = (sy * width + sx) * 4;
+          const alpha = pixels[i + 3];
+          r += pixels[i] * alpha; g += pixels[i + 1] * alpha; b += pixels[i + 2] * alpha; a += alpha;
+          n++;
+        }
+      }
+      const o = (y * newWidth + x) * 4;
+      if (a) out.set([r / a, g / a, b / a, a / n], o);
+      else {
+        // All clear: keep the hidden colour of the first pixel, as the painter does.
+        const i = (top * width + left) * 4;
+        out.set([pixels[i], pixels[i + 1], pixels[i + 2], 0], o);
+      }
+    }
+  }
+  return out;
+}
+
 export class PaintDocument {
   constructor(width, height, pixels) {
     this.width = width;
@@ -91,6 +122,12 @@ export class PaintDocument {
       }
     }
     this.stroke.last = { x, y };
+  }
+
+  // Lifts the brush without ending the stroke: the next point starts afresh instead of joining up.
+  // Painting on the model needs it where a stroke crosses a seam to another part of the texture.
+  liftBrush() {
+    if (this.stroke) this.stroke.last = null;
   }
 
   dab(cx, cy) {

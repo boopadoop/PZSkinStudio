@@ -1,6 +1,7 @@
 // The texture on screen while painting: zooming, moving it around, the guides, and turning the
 // mouse into strokes. The guides are only drawn here, so they never reach the texture.
 import { footprints } from './paintdoc.js';
+import { partCss } from './partcolour.js';
 
 const ZOOMS = [0.25, 0.5, 0.75, 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 48, 64];
 const GRID_MIN_ZOOM = 3;    // any closer together and the lines hide the pixels
@@ -57,15 +58,24 @@ export class PaintView {
     this.image = new ImageData(doc.pixels, doc.width, doc.height);
     this.bufferContext.putImageData(this.image, 0, 0);
 
+    // All the lines, and with colourParts (each corner's object number), the lines of each object.
     this.uvLines = new Path2D();
-    const { uv, edges } = mesh;
+    this.partLines = new Map();
+    const { uv, edges, colourParts } = mesh;
     for (let i = 0; i < edges.length; i += 2) {
       const [a, b] = [edges[i] * 2, edges[i + 1] * 2];
-      this.uvLines.moveTo(uv[a] * doc.width, uv[a + 1] * doc.height);
-      this.uvLines.lineTo(uv[b] * doc.width, uv[b + 1] * doc.height);
+      for (const path of [this.uvLines, colourParts && this.partPath(colourParts[edges[i]])].filter(Boolean)) {
+        path.moveTo(uv[a] * doc.width, uv[a + 1] * doc.height);
+        path.lineTo(uv[b] * doc.width, uv[b + 1] * doc.height);
+      }
     }
     this.resize();
     this.fit();
+  }
+
+  partPath(part) {
+    if (!this.partLines.has(part)) this.partLines.set(part, new Path2D());
+    return this.partLines.get(part);
   }
 
   close() {
@@ -130,8 +140,12 @@ export class PaintView {
       return;
     }
     if (event.button !== 0) return;
-    const texel = this.texelAt(event);
-    if (this.tool.mode === 'pick' || event.altKey) {
+    this.startAt(this.texelAt(event), event.altKey);
+  }
+
+  // A stroke, pick or fill starting at a texture pixel: from this canvas, or from the model.
+  startAt(texel, alt = false) {
+    if (this.tool.mode === 'pick' || alt) {
       this.drag = { kind: 'pick' };
       this.pick(texel);
       return;
@@ -148,6 +162,27 @@ export class PaintView {
     this.doc.beginStroke(this.tool);
     this.doc.strokeTo(texel.x, texel.y);
     this.handlers.onStrokeChange();
+  }
+
+  // The next point of a drag from the model. joined: whether it carries on from the last one, or
+  // jumps (across a seam to somewhere else on the texture).
+  dragTo(texel, joined) {
+    this.hover = texel;
+    if (this.drag?.kind === 'pick') this.pick(texel);
+    else if (this.drag?.kind === 'paint') {
+      if (!joined) this.doc.liftBrush();
+      this.doc.strokeTo(texel.x, texel.y);
+      this.handlers.onStrokeChange();
+    }
+    this.requestDraw();
+    this.handlers.onHover();
+  }
+
+  // The brush hovering a texture pixel from the model, or null when it's off the model.
+  hoverAt(texel) {
+    this.hover = texel;
+    this.requestDraw();
+    this.handlers.onHover();
   }
 
   onPointerMove(event) {
@@ -277,9 +312,16 @@ export class PaintView {
     context.strokeStyle = 'rgba(0, 0, 0, 0.55)';
     context.lineWidth = 3 / zoom;
     context.stroke(this.uvLines);
-    context.strokeStyle = 'rgba(255, 255, 255, 0.85)';
     context.lineWidth = 1 / zoom;
-    context.stroke(this.uvLines);
+    if (this.partLines.size) {
+      for (const [part, path] of this.partLines) {
+        context.strokeStyle = partCss(part, 0.95);
+        context.stroke(path);
+      }
+    } else {
+      context.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+      context.stroke(this.uvLines);
+    }
     context.restore();
   }
 
@@ -308,13 +350,21 @@ export class PaintView {
   }
 
   drawBrush() {
-    if (!this.hover || this.moving || this.drag?.kind === 'pan') return;
+    if (!this.hover || this.moving || this.drag?.kind === 'pan') {
+      this.handlers.onBrush?.(null);
+      return;
+    }
     const { context, doc, offset, zoom, tool } = this;
     const picking = tool.mode === 'pick';
     const onePixel = picking || tool.mode === 'fill';
     const size = onePixel ? 1 : tool.size;
     const across = size * zoom;
     const spots = footprints(this.hover.x, this.hover.y, size, doc.width, doc.height, !picking && tool.mirrorX, !picking && tool.mirrorY);
+    // The same outlines, for the model: boxes in UV space.
+    this.handlers.onBrush?.({
+      round: !(tool.brush === 'square' || onePixel),
+      spots: spots.map(({ left, top }) => [left / doc.width, top / doc.height, (left + size) / doc.width, (top + size) / doc.height]),
+    });
     const outline = (left, top, shift, colour) => {
       context.strokeStyle = colour;
       context.lineWidth = 1;

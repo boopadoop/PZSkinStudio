@@ -1,7 +1,10 @@
 // Works out what's in the folder the same way the game does: mods share one merged media folder,
 // species.lua lists the characters, each character's clothing XML names its model and texture.
 import { unzlibSync } from 'fflate';
-import { parseFbxTree, readLayout, readMesh } from './fbx.js';
+import {
+  parseFbxTree, readLayout, readMesh, readViewLayout, readWholeMesh, readWholeUvLayers, viewMesh, viewsOf,
+} from './fbx.js';
+import { checkModel, facesNote, fileNotes, uvNotes } from './modelcheck.js';
 import { clear, get, put } from './library.js';
 
 const MEDIA = /^(.*?\/)?media\/(.+)$/i;
@@ -96,7 +99,8 @@ export async function scanFolder(entries, folderName, onProgress) {
   };
 
   for (const entry of entries) {
-    if (/(^|\/)skins\/[^/]+\.zip$/i.test(entry.path)) {
+    // Skins: any zip in skins/, and any .skin.zip wherever else it was put, such as beside the models.
+    if (/(^|\/)skins\/[^/]+\.zip$/i.test(entry.path) || /\.skin\.zip$/i.test(entry.path)) {
       skinFiles.push(entry);
       continue;
     }
@@ -230,12 +234,37 @@ export async function scanFolder(entries, folderName, onProgress) {
   await saveModels(characters, onProgress);
   await saveTextures(characters, onProgress);
   for (const entry of skinFiles) {
-    const name = baseName(entry.path);
+    // Kept under the file's own name if it's in skins/, and under its path anywhere else, so two
+    // files of the same name in different folders don't overwrite each other.
+    const name = /(^|\/)skins\/[^/]+$/i.test(entry.path) ? baseName(entry.path) : entry.path;
     await put('skins', name, { name, bytes: new Uint8Array(await (await entry.open()).arrayBuffer()) });
   }
   characters.sort((a, b) => a.group.localeCompare(b.group) || a.display.localeCompare(b.display));
   await put('catalog', 'current', { folderName, characters: characters.map(toRecord) });
   return loadLibrary();
+}
+
+// A file with several objects or materials: one mesh of the whole file, and each view's layout and notes.
+function viewedModel(tree, views, general) {
+  const mesh = readWholeMesh(tree);
+  const layers = readWholeUvLayers(tree);
+  const about = fileNotes(tree, { general });
+  const faces = facesNote(tree, { general });
+  const shown = (general ? views.filter((v) => !v.game) : views).map((view) => {
+    const { index } = viewMesh(mesh, view.id);
+    const uv = index.length ? uvNotes(layers, index, { cornerPart: mesh.cornerPart, whole: view.id === 'whole' }) : [];
+    return { ...view, ...readViewLayout(tree, view.id), checks: [...about, ...uv, ...faces] };
+  });
+  const defaultView = general ? 'whole' : 'game';
+  const first = shown.find((v) => v.id === defaultView);
+  // The game's own layout, if the part it draws can be read; a general model goes by the whole.
+  let game = null;
+  try { game = readLayout(tree); } catch { game = null; }
+  return {
+    mesh, views: shown, defaultView,
+    layout: general || !game ? first.layout : game.layout,
+    verts: first.verts, polys: first.polys, checks: first.checks,
+  };
 }
 
 const variantsOf = (characters) => characters.flatMap((c) => Object.values(c.bodies)).filter(Boolean);
@@ -258,7 +287,8 @@ function toRecord(character) {
   for (const [body, v] of Object.entries(character.bodies)) {
     bodies[body] = v && {
       body: v.body, item: v.item, itemRef: v.itemRef, modelRef: v.modelRef, pack: v.pack,
-      layout: v.layout, verts: v.verts, polys: v.polys, error: v.error,
+      layout: v.layout, verts: v.verts, polys: v.polys, error: v.error, checks: v.checks,
+      general: v.general, views: v.views, defaultView: v.defaultView,
       model: { tail: v.model.tail }, meshKey: v.meshKey,
       textures: v.textures.map((t) => ({ ref: t.ref, path: t.entry.path, size: t.size })),
     };
@@ -277,9 +307,14 @@ export async function loadLibrary() {
       for (const texture of variant.textures) {
         texture.read = () => get('textures', texture.path);
       }
-      if (!variant.layout) continue;
-      if (!catalog.layouts.has(variant.layout)) catalog.layouts.set(variant.layout, []);
-      catalog.layouts.get(variant.layout).push({ character, variant });
+      // Every view of a file reads the same UV maps, so its pictures and skins fit them all.
+      const layouts = new Map();
+      if (variant.layout) layouts.set(variant.layout, variant.views?.find((v) => v.layout === variant.layout)?.id ?? null);
+      for (const view of variant.views ?? []) if (!layouts.has(view.layout)) layouts.set(view.layout, view.id);
+      for (const [layout, view] of layouts) {
+        if (!catalog.layouts.has(layout)) catalog.layouts.set(layout, []);
+        catalog.layouts.get(layout).push({ character, variant, view });
+      }
     }
   }
   return catalog;
@@ -314,13 +349,30 @@ async function saveModels(characters, onProgress) {
       try {
         const file = await variant.model.open();
         const tree = parseFbxTree(new Uint8Array(await file.arrayBuffer()), unzlibSync);
-        info = readLayout(tree);
-        // The two bodies are often the same file.
-        info.meshKey = `${file.size}:${info.layout}`;
-        if (!saved.has(info.meshKey)) {
-          await put('meshes', info.meshKey, readMesh(tree));
-          saved.add(info.meshKey);
+        // A model outside any mod's media folder isn't meant for the game: no game checks, and it
+        // opens whole.
+        const general = !MEDIA.test(path);
+        const views = viewsOf(tree);
+        if (!views.length) {
+          info = readLayout(tree);
+          // The two bodies are often the same file.
+          info.meshKey = `${file.size}:${info.layout}`;
+          const mesh = readMesh(tree);
+          info.checks = checkModel(tree, mesh, { general });
+          if (!saved.has(info.meshKey)) {
+            await put('meshes', info.meshKey, mesh);
+            saved.add(info.meshKey);
+          }
+        } else {
+          info = viewedModel(tree, views, general);
+          info.meshKey = `${file.size}:${info.views[0].layout}:whole`;
+          if (!saved.has(info.meshKey)) {
+            await put('meshes', info.meshKey, info.mesh);
+            saved.add(info.meshKey);
+          }
+          delete info.mesh;
         }
+        info.general = general;
       } catch (error) {
         info = { error: error.message };
       }

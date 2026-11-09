@@ -9,3 +9,6 @@ models/*
 # Your own skins.
 skins/*
 !skins/.gitkeep
+
+# Paintings saved by the studio.
+paint history/
